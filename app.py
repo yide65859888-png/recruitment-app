@@ -569,20 +569,20 @@ elif page == "📊 业务预警与数据看板":
                 " 拟约面, SUM(accepted_interview) as 接受面试 FROM platform_data"
                 " WHERE date LIKE ? GROUP BY employee_name",
                 conn,
-                params=(date_filter_p,),
+                params=[date_filter_p],
             )
             df_perf = pd.read_sql_query(
                 """SELECT employee_name as 员工姓名, 
                           MAX(month_invites) as 邀约数,
                           MAX(month_interviews) as 到面数,
-                          MAX(month_inner_ft) as `参培数(内单全职)`,
-                          MAX(month_inner_pt) as `参培数(内单兼职)`,
-                          MAX(month_outer_ft) as `参培数(外单全职)`,
-                          MAX(month_outer_pt) as `参培数(外单兼职)`,
+                          MAX(month_inner_ft) as "参培数(内单全职)",
+                          MAX(month_inner_pt) as "参培数(内单兼职)",
+                          MAX(month_outer_ft) as "参培数(外单全职)",
+                          MAX(month_outer_pt) as "参培数(外单兼职)",
                           MAX(month_trainees) as 参培数
                    FROM performance_data WHERE date LIKE ? GROUP BY employee_name""",
                 conn,
-                params=(date_filter_perf,),
+                params=[date_filter_perf],
             )
         else:
             df_p = pd.read_sql_query(
@@ -593,20 +593,20 @@ elif page == "📊 业务预警与数据看板":
                 " 拟约面, SUM(accepted_interview) as 接受面试 FROM platform_data"
                 " WHERE date = ? GROUP BY employee_name",
                 conn,
-                params=(date_filter_p,),
+                params=[date_filter_p],
             )
             df_perf = pd.read_sql_query(
                 """SELECT employee_name as 员工姓名, 
                           SUM(invites) as 邀约数,
                           SUM(interviews) as 到面数,
-                          SUM(inner_ft) as `参培数(内单全职)`,
-                          SUM(inner_pt) as `参培数(内单兼职)`,
-                          SUM(outer_ft) as `参培数(外单全职)`,
-                          SUM(outer_pt) as `参培数(外单兼职)`,
+                          SUM(inner_ft) as "参培数(内单全职)",
+                          SUM(inner_pt) as "参培数(内单兼职)",
+                          SUM(outer_ft) as "参培数(外单全职)",
+                          SUM(outer_pt) as "参培数(外单兼职)",
                           SUM(trainees) as 参培数
                    FROM performance_data WHERE date = ? GROUP BY employee_name""",
                 conn,
-                params=(date_filter_perf,),
+                params=[date_filter_perf],
             )
 
     df_base = pd.DataFrame({"员工姓名": selected_employees})
