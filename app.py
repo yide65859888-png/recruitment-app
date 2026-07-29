@@ -211,6 +211,7 @@ if not st.session_state.logged_in:
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
+
 # ---------------------------------------------------------
 # 4. 辅助函数与 Mock OCR
 # ---------------------------------------------------------
@@ -685,6 +686,10 @@ elif page == "📊 业务预警与数据看板":
     st.markdown("##### 📥 导出数据")
     col_exp1, col_exp2 = st.columns([1, 1])
 
+    # 提取时间标识，避免 f-string 语法错误
+    time_tag_filename = month_str if "单月" in view_mode else date_str
+    export_file_name = f"招聘数据_{st.session_state.real_name}_{time_tag_filename}"
+
     with col_exp1:
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
@@ -694,10 +699,7 @@ elif page == "📊 业务预警与数据看板":
         st.download_button(
             label="📊 导出 Excel 表格 (.xlsx)",
             data=excel_buffer.getvalue(),
-            file_name=(
-                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in"
-                f" view_mode else date_str}.xlsx"
-            ),
+            file_name=f"{export_file_name}.xlsx",
             mime=(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
@@ -710,10 +712,7 @@ elif page == "📊 业务预警与数据看板":
         st.download_button(
             label="📄 导出 CSV 文件 (.csv)",
             data=csv_bytes,
-            file_name=(
-                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in"
-                f" view_mode else date_str}.csv"
-            ),
+            file_name=f"{export_file_name}.csv",
             mime="text/csv",
         )
 
