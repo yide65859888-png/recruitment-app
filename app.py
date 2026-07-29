@@ -9,7 +9,7 @@ from PIL import Image
 import streamlit as st
 
 # ---------------------------------------------------------
-# 1. 页面基本配置 (必须作为首条 Streamlit 指令)
+# 1. 页面基本配置
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="招聘全链路数据监控与智能预警系统",
@@ -94,16 +94,17 @@ YESTERDAY = datetime.date.today() - datetime.timedelta(days=1)
 MAX_DAILY_UPLOADS = 3
 DB_PATH = "recruitment_data.db"
 
-# 通义千问视觉识别配置（阿里云百炼平台）
+# 通义千问视觉识别配置
 QWEN_CONFIG = {
-      'api_key': 'sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy',
+    'api_key': 'sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy',
     'base_url': 'https://api.siliconflow.cn/v1',
     'model': 'Qwen/Qwen3.6-35B-A3B',
+    'enable_thinking': False,  # 关闭 Qwen3 思考模式，加快响应
 }
 
 
 # ---------------------------------------------------------
-# 2. 数据库初始化
+# 2. 数据库初始化（升级为新表头架构）
 # ---------------------------------------------------------
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -231,7 +232,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ---------------------------------------------------------
-# 4. 辅助函数与大模型 OCR
+# 4. 辅助函数与通义千问大模型 OCR
 # ---------------------------------------------------------
 def mock_employee_ocr(image):
     return {
@@ -246,7 +247,7 @@ def mock_employee_ocr(image):
 
 
 def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
-    """使用阿里云通义千问 qwen-vl-max 多模态大模型识别招聘数据表格"""
+    """使用 SiliconFlow 通义千问多模态模型识别招聘数据表格"""
     try:
         client = OpenAI(
             api_key=QWEN_CONFIG['api_key'], base_url=QWEN_CONFIG['base_url']
@@ -295,10 +296,12 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
                 ],
             }],
             temperature=0.1,
+            extra_body={"enable_thinking": QWEN_CONFIG['enable_thinking']},
         )
 
         content = response.choices[0].message.content.strip()
 
+        # 清理可能附带的 markdown 格式包裹
         if content.startswith("```"):
             lines = content.split("\n")
             if lines[0].startswith("```"):
@@ -625,7 +628,7 @@ if page == "📱 员工端：手机填报与截图上传":
             )
 
 # ---------------------------------------------------------
-# 模块二：数据看板
+# 模块二：数据看板（展示最新统一表头）
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown(
@@ -840,7 +843,7 @@ elif page == "📊 业务预警与数据看板":
         st.success("🎉 数据表现正常，暂无过程卡点预警！")
 
 # ---------------------------------------------------------
-# 模块三：识图录入端
+# 模块三：识图录入端（已接入通义千问视觉识别 API）
 # ---------------------------------------------------------
 elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     st.markdown(
