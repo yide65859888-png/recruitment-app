@@ -1,7 +1,10 @@
+import base64
 import datetime
 import io
+import json
 import sqlite3
 import pandas as pd
+from openai import OpenAI
 from PIL import Image
 import streamlit as st
 
@@ -90,6 +93,14 @@ DEFAULT_MEMBERS = [
 YESTERDAY = datetime.date.today() - datetime.timedelta(days=1)
 MAX_DAILY_UPLOADS = 3
 DB_PATH = "recruitment_data.db"
+
+# 通义千问视觉识别配置
+QWEN_CONFIG = {
+    'api_key': 'sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy',
+    'base_url': 'https://api.siliconflow.cn/v1',
+    'model': 'Qwen/Qwen3.6-35B-A3B',
+    'enable_thinking': False,  # 关闭 Qwen3 思考模式，加快响应
+}
 
 
 # ---------------------------------------------------------
@@ -221,7 +232,7 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ---------------------------------------------------------
-# 4. 辅助函数与 Mock OCR (适配新表头)
+# 4. 辅助函数与通义千问大模型 OCR
 # ---------------------------------------------------------
 def mock_employee_ocr(image):
     return {
@@ -235,32 +246,131 @@ def mock_employee_ocr(image):
     }
 
 
-def mock_supervisor_ocr_daily(image, members):
-    return pd.DataFrame({
-        "员工姓名": members,
-        "邀约数": [3, 11, 2, 5, 8, 2, 1, 3, 0, 6, 4][: len(members)],
-        "到面数": [1, 9, 3, 2, 6, 1, 2, 4, 0, 5, 3][: len(members)],
-        "参培数(内单全职)": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0][: len(members)],
-        "参培数(内单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
-        "参培数(外单全职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
-        "参培数(外单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
-        "参培数": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0][: len(members)],
-    })
+def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
+    """使用 SiliconFlow 通义千问多模态模型识别招聘数据表格"""
+    try:
+        client = OpenAI(
+            api_key=QWEN_CONFIG['api_key'], base_url=QWEN_CONFIG['base_url']
+        )
 
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-def mock_supervisor_ocr_monthly(image, members):
-    return pd.DataFrame({
-        "员工姓名": members,
-        "邀约数": [157, 465, 94, 107, 180, 75, 60, 110, 15, 140, 130][
-            : len(members)
-        ],
-        "到面数": [44, 209, 55, 47, 130, 45, 35, 70, 5, 95, 85][: len(members)],
-        "参培数(内单全职)": [8, 60, 4, 15, 12, 3, 2, 7, 0, 10, 8][: len(members)],
-        "参培数(内单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
-        "参培数(外单全职)": [2, 3, 0, 1, 7, 2, 2, 4, 0, 5, 4][: len(members)],
-        "参培数(外单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
-        "参培数": [10, 63, 4, 16, 19, 5, 4, 11, 0, 15, 12][: len(members)],
-    })
+        prompt = f"""
+        你是一个专业的数据提取助手。请仔细识别图片中表格包含的招聘数据。
+
+        【目标员工列表】：
+        {json.dumps(members, ensure_ascii=False)}
+
+        【提取规则】：
+        1. 请仔细读取图片中每一行员工对应的【邀约数】、【到面数】以及各个参培拆分项数值。
+        2. 识别提取目标员工列表中各成员的数据。
+        3. 如果图片中某项数值为空或未填写，默认设为 0。
+        4. 必须只输出严格的 JSON 数组结构，不要包含任何 markdown 标签、解释文字或思考过程。
+
+        【输出 JSON 字段结构】：
+        [
+          {{
+            "员工姓名": "张三",
+            "邀约数": 10,
+            "到面数": 5,
+            "参培数(内单全职)": 0,
+            "参培数(内单兼职)": 0,
+            "参培数(外单全职)": 1,
+            "参培数(外单兼职)": 0
+          }}
+        ]
+        """
+
+        response = client.chat.completions.create(
+            model=QWEN_CONFIG['model'],
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                    },
+                ],
+            }],
+            temperature=0.1,
+            extra_body={"enable_thinking": QWEN_CONFIG['enable_thinking']},
+        )
+
+        content = response.choices[0].message.content.strip()
+
+        # 清理可能附带的 markdown 格式包裹
+        if content.startswith("```"):
+            lines = content.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+
+        data_list = json.loads(content)
+        df = pd.DataFrame(data_list)
+
+        required_cols = [
+            "员工姓名",
+            "邀约数",
+            "到面数",
+            "参培数(内单全职)",
+            "参培数(内单兼职)",
+            "参培数(外单全职)",
+            "参培数(外单兼职)",
+        ]
+        for col in required_cols:
+            if col not in df.columns:
+                if col == "员工姓名":
+                    df["员工姓名"] = members
+                else:
+                    df[col] = 0
+
+        numeric_cols = [
+            "邀约数",
+            "到面数",
+            "参培数(内单全职)",
+            "参培数(内单兼职)",
+            "参培数(外单全职)",
+            "参培数(外单兼职)",
+        ]
+        for col in numeric_cols:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+        df["参培数"] = (
+            df["参培数(内单全职)"]
+            + df["参培数(内单兼职)"]
+            + df["参培数(外单全职)"]
+            + df["参培数(外单兼职)"]
+        )
+        return df[
+            [
+                "员工姓名",
+                "邀约数",
+                "到面数",
+                "参培数(内单全职)",
+                "参培数(内单兼职)",
+                "参培数(外单全职)",
+                "参培数(外单兼职)",
+                "参培数",
+            ]
+        ]
+
+    except Exception as e:
+        st.error(f"⚠️ 大模型识别出现异常 ({e})，已切换至基础表结构，请手动补全修改。")
+        return pd.DataFrame({
+            "员工姓名": members,
+            "邀约数": 0,
+            "到面数": 0,
+            "参培数(内单全职)": 0,
+            "参培数(内单兼职)": 0,
+            "参培数(外单全职)": 0,
+            "参培数(外单兼职)": 0,
+            "参培数": 0,
+        })
 
 
 def get_upload_count_today(date_str, emp_name, platform):
@@ -449,7 +559,6 @@ if page == "📱 员工端：手机填报与截图上传":
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("1️⃣ 基本信息确认")
 
-    # 管理员可以下拉切换代上传的员工
     if not is_admin:
         emp_name = st.session_state.real_name
         st.info(f"👤 填报员工：**{emp_name}**（自动绑定当前登录账号）")
@@ -734,7 +843,7 @@ elif page == "📊 业务预警与数据看板":
         st.success("🎉 数据表现正常，暂无过程卡点预警！")
 
 # ---------------------------------------------------------
-# 模块三：识图录入端（适配新表头）
+# 模块三：识图录入端（已接入通义千问视觉识别 API）
 # ---------------------------------------------------------
 elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     st.markdown(
@@ -758,7 +867,10 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
         if daily_img is not None:
             image = Image.open(daily_img)
             st.image(image, caption="已上传截图", width=400)
-            df_extracted = mock_supervisor_ocr_daily(image, all_team_members)
+
+            with st.spinner("🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."):
+                df_extracted = llm_supervisor_ocr(image, all_team_members)
+
             st.info(
                 "💡 请在下方核对识图抓取结果，参培数会自动根据 4 个拆分项计算合计："
             )
@@ -802,9 +914,10 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
         if monthly_img is not None:
             image = Image.open(monthly_img)
             st.image(image, caption="已上传截图", width=400)
-            df_extracted = mock_supervisor_ocr_monthly(
-                image, all_team_members
-            )
+
+            with st.spinner("🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."):
+                df_extracted = llm_supervisor_ocr(image, all_team_members)
+
             st.info(
                 "💡 请在下方核对识图抓取结果，参培数会自动根据 4 个拆分项计算合计："
             )
