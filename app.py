@@ -82,28 +82,27 @@ YESTERDAY = datetime.date.today() - datetime.timedelta(days=1)
 MAX_DAILY_UPLOADS = 3
 
 # ---------------------------------------------------------
-# 2. 数据库初始化与自动补全（防止DatabaseError）
+# 2. 数据库纯净初始化（方案3：无ALTER TABLE的纯净结构）
 # ---------------------------------------------------------
 def init_db():
     conn = sqlite3.connect("recruitment_data.db")
     c = conn.cursor()
     
-    # 1. 平台过程数据表
+    # 1. 平台过程数据表（直接包含 created_at 字段）
     c.execute("""CREATE TABLE IF NOT EXISTS platform_data (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    date TEXT, employee_name TEXT, platform_version TEXT,
-                    seen_me INTEGER DEFAULT 0, i_communicated INTEGER DEFAULT 0,
-                    received_resumes INTEGER DEFAULT 0, exchanged_contact INTEGER DEFAULT 0,
-                    exchanged_phone INTEGER DEFAULT 0, proposed_interview INTEGER DEFAULT 0,
+                    date TEXT, 
+                    employee_name TEXT, 
+                    platform_version TEXT,
+                    seen_me INTEGER DEFAULT 0, 
+                    i_communicated INTEGER DEFAULT 0,
+                    received_resumes INTEGER DEFAULT 0, 
+                    exchanged_contact INTEGER DEFAULT 0,
+                    exchanged_phone INTEGER DEFAULT 0, 
+                    proposed_interview INTEGER DEFAULT 0,
                     accepted_interview INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )""")
-    
-    # 自动升级表结构：防止旧数据库缺失 created_at 导致 DatabaseError
-    c.execute("PRAGMA table_info(platform_data)")
-    columns = [col[1] for col in c.fetchall()]
-    if "created_at" not in columns:
-        c.execute("ALTER TABLE platform_data ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
     # 2. 团队业绩数据表
     c.execute("""CREATE TABLE IF NOT EXISTS performance_data (
@@ -131,7 +130,7 @@ def init_db():
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO users (username, password, real_name, role) VALUES ('admin', 'admin123', '系统管理员', 'admin')")
     
-    # 初始化默认员工账号（拼音或姓名小写为账号，默认密码 123456）
+    # 初始化默认员工账号（默认密码 123456）
     for name in DEFAULT_MEMBERS:
         c.execute("SELECT COUNT(*) FROM users WHERE real_name = ?", (name,))
         if c.fetchone()[0] == 0:
@@ -188,7 +187,7 @@ if not st.session_state.logged_in:
                 st.success("登录成功！正在跳转...")
                 st.rerun()
             else:
-                st.error("❌ 账号或密码错误！(默认密码为 123456，管理员账号 admin/admin123)")
+                st.error("❌ 账号或密码错误！(默认员工密码为 123456，管理员账号 admin/admin123)")
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
@@ -329,7 +328,7 @@ is_admin = (st.session_state.role == "admin")
 st.sidebar.title("📌 招聘监控系统")
 st.sidebar.markdown(f"<div class='user-badge'>👤 当前登录：{st.session_state.real_name} ({'管理员' if is_admin else '员工'})</div>", unsafe_allow_html=True)
 
-# 动态生成不同权重的菜单
+# 动态生成菜单
 menu_options = ["📱 员工端：手机填报与截图上传", "📊 业务预警与数据看板"]
 if is_admin:
     menu_options.extend([
@@ -347,7 +346,7 @@ if st.sidebar.button("🚪 退出登录"):
     st.rerun()
 
 # ---------------------------------------------------------
-# 模块一：员工端（锁定登录员工自身）
+# 模块一：员工端
 # ---------------------------------------------------------
 if page == "📱 员工端：手机填报与截图上传":
     st.markdown("<div class='main-header'>📱 员工每日平台数据快捷填报</div>", unsafe_allow_html=True)
@@ -355,7 +354,6 @@ if page == "📱 员工端：手机填报与截图上传":
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("1️⃣ 基本信息确认")
     
-    # 权限限制：如果是员工登录，强制绑定本人姓名，不可选择他人
     if not is_admin:
         emp_name = st.session_state.real_name
         st.info(f"👤 填报员工：**{emp_name}**（自动绑定当前登录账号）")
@@ -407,7 +405,7 @@ if page == "📱 员工端：手机填报与截图上传":
             st.success(f"🎉 提交成功！[{emp_name}] 的 [{date_str}] [{platform_ver}] 数据已保存！（当日已提交 {current_count + 1}/{MAX_DAILY_UPLOADS} 次）")
 
 # ---------------------------------------------------------
-# 模块二：数据看板（权限隔离：员工只能看自己）
+# 模块二：数据看板
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown("<div class='main-header'>📊 招聘全链路过程数据监控看板</div>", unsafe_allow_html=True)
@@ -428,10 +426,9 @@ elif page == "📊 业务预警与数据看板":
         date_filter_p = date_str
         date_filter_perf = date_str
 
-    # 权限处理：普通员工强制限定只能看自己，管理员可选全员
     if not is_admin:
         selected_employees = [st.session_state.real_name]
-        col_filter.info(f"🔒 数据范围：已锁定为当前员工 **[{st.session_state.real_name}]**")
+        col_filter.info(f"🔒 数据范围：已锁定当前登录员工 **[{st.session_state.real_name}]**")
     else:
         selected_employees = col_filter.multiselect("筛选员工姓名", all_team_members, default=all_team_members)
 
@@ -513,7 +510,6 @@ elif page == "📊 业务预警与数据看板":
             mime="text/csv"
         )
 
-    # 排名仅对管理员展示（避免员工相互攀比泄露）
     if is_admin and len(df_summary) > 1:
         st.write("---")
         st.subheader("📊 招聘关键过程指标 (KPI) 团队排名")
@@ -547,7 +543,7 @@ elif page == "📊 业务预警与数据看板":
         st.success("🎉 数据表现正常，暂无过程卡点预警！")
 
 # ---------------------------------------------------------
-# 模块三：识图录入端（仅管理员）
+# 模块三：识图录入端（管理员专用）
 # ---------------------------------------------------------
 elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     st.markdown("<div class='main-header'>📋 数据端：部门业绩汇总与智能识图录入 (管理员专用)</div>", unsafe_allow_html=True)
@@ -626,14 +622,13 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
                 st.success(f"🎉 成功保存 {date_str} 月度业绩数据！")
 
 # ---------------------------------------------------------
-# 模块四：管理端（账号管理 & 记录删除，仅管理员）
+# 模块四：管理端（管理员专用）
 # ---------------------------------------------------------
 elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
     st.markdown("<div class='main-header'>⚙️ 后台管理中心 (管理员权限)</div>", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["👤 员工与账号管理", "🗑️ 数据记录删除与维护"])
 
-    # 子页签 1：账号管理（新增、修改密码、删除）
     with tab1:
         st.subheader("➕ 新增员工账号")
         col_u1, col_u2, col_u3, col_u4 = st.columns([1.5, 1.5, 1.5, 1])
@@ -685,28 +680,16 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                 st.success("✅ 账号删除成功！")
                 st.rerun()
 
-    # 子页签 2：记录删除（安全解决 DatabaseError 报错）
     with tab2:
         st.subheader("📋 所有平台上传记录维护")
         conn = sqlite3.connect("recruitment_data.db")
-        
-        # 安全读取 platform_data，容错机制
-        try:
-            df_records = pd.read_sql_query(
-                """SELECT id as 记录编号, date as 归属日期, employee_name as 员工姓名, platform_version as 平台,
-                          seen_me as 看过我, i_communicated as 主动沟通, received_resumes as 收到简历,
-                          exchanged_contact as 微信, exchanged_phone as 电话, created_at as 提交时间
-                   FROM platform_data ORDER BY id DESC""",
-                conn
-            )
-        except Exception:
-            df_records = pd.read_sql_query(
-                """SELECT id as 记录编号, date as 归属日期, employee_name as 员工姓名, platform_version as 平台,
-                          seen_me as 看过我, i_communicated as 主动沟通, received_resumes as 收到简历,
-                          exchanged_contact as 微信, exchanged_phone as 电话
-                   FROM platform_data ORDER BY id DESC""",
-                conn
-            )
+        df_records = pd.read_sql_query(
+            """SELECT id as 记录编号, date as 归属日期, employee_name as 员工姓名, platform_version as 平台,
+                      seen_me as 看过我, i_communicated as 主动沟通, received_resumes as 收到简历,
+                      exchanged_contact as 微信, exchanged_phone as 电话, created_at as 提交时间
+               FROM platform_data ORDER BY id DESC""",
+            conn
+        )
         conn.close()
 
         if not df_records.empty:
