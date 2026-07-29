@@ -628,7 +628,7 @@ if page == "📱 员工端：手机填报与截图上传":
             )
 
 # ---------------------------------------------------------
-# 模块二：数据看板（展示最新统一表头）
+# 模块二：数据看板（展示最新统一表头 + 支持合计）
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown(
@@ -730,7 +730,42 @@ elif page == "📊 业务预警与数据看板":
         ),
         axis=1,
     )
-    df_summary["到面转化率"] = df_summary["到面转化率数值"].apply(
+
+    # ---------------------------------------------------------
+    # ✨ 新增：自动计算并追加“合计”行
+    # ---------------------------------------------------------
+    numeric_cols_to_sum = [
+        "看过我",
+        "主动沟通",
+        "收获简历",
+        "交换微信",
+        "交换电话",
+        "拟约面",
+        "接受面试",
+        "邀约数",
+        "到面数",
+        "参培数(内单全职)",
+        "参培数(内单兼职)",
+        "参培数(外单全职)",
+        "参培数(外单兼职)",
+        "参培数",
+    ]
+
+    total_row = {"员工姓名": "合计"}
+    for col in numeric_cols_to_sum:
+        total_row[col] = df_summary[col].sum()
+
+    total_invites = total_row["邀约数"]
+    total_interviews = total_row["到面数"]
+    total_conv_rate = (
+        (total_interviews / total_invites * 100) if total_invites > 0 else 0.0
+    )
+    total_row["到面转化率数值"] = total_conv_rate
+
+    df_display = pd.concat(
+        [df_summary, pd.DataFrame([total_row])], ignore_index=True
+    )
+    df_display["到面转化率"] = df_display["到面转化率数值"].apply(
         lambda x: f"{x:.1f}%"
     )
 
@@ -756,7 +791,7 @@ elif page == "📊 业务预警与数据看板":
     st.subheader(
         f"📋 招聘全链路汇总表 ({month_str if '单月' in view_mode else date_str})"
     )
-    st.dataframe(df_summary[final_cols], height=200 if not is_admin else 350)
+    st.dataframe(df_display[final_cols], height=250 if not is_admin else 400)
 
     st.markdown("##### 📥 导出数据")
     col_exp1, col_exp2 = st.columns([1, 1])
@@ -764,7 +799,7 @@ elif page == "📊 业务预警与数据看板":
     with col_exp1:
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            df_summary[final_cols].to_excel(
+            df_display[final_cols].to_excel(
                 writer, index=False, sheet_name="招聘数据"
             )
         st.download_button(
@@ -780,7 +815,7 @@ elif page == "📊 业务预警与数据看板":
 
     with col_exp2:
         csv_bytes = (
-            df_summary[final_cols].to_csv(index=False).encode("utf-8-sig")
+            df_display[final_cols].to_csv(index=False).encode("utf-8-sig")
         )
         st.download_button(
             label="📄 导出 CSV 文件 (.csv)",
