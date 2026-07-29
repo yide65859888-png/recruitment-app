@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import io
 import sqlite3
 import pandas as pd
@@ -93,7 +94,7 @@ DB_PATH = "recruitment_data.db"
 
 
 # ---------------------------------------------------------
-# 2. 数据库纯净初始化
+# 2. 数据库初始化（升级为新表头架构）
 # ---------------------------------------------------------
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -116,13 +117,22 @@ def init_db():
 
         c.execute("""CREATE TABLE IF NOT EXISTS performance_data (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        date TEXT, employee_name TEXT,
-                        inner_invites INTEGER DEFAULT 0, outer_invites INTEGER DEFAULT 0, invites INTEGER DEFAULT 0,
-                        inner_interviews INTEGER DEFAULT 0, outer_interviews INTEGER DEFAULT 0, interviews INTEGER DEFAULT 0,
-                        inner_trainees INTEGER DEFAULT 0, outer_trainees INTEGER DEFAULT 0, trainees INTEGER DEFAULT 0,
-                        month_inner_invites INTEGER DEFAULT 0, month_outer_invites INTEGER DEFAULT 0, month_invites INTEGER DEFAULT 0,
-                        month_inner_interviews INTEGER DEFAULT 0, month_outer_interviews INTEGER DEFAULT 0, month_interviews INTEGER DEFAULT 0,
-                        month_inner_trainees INTEGER DEFAULT 0, month_outer_trainees INTEGER DEFAULT 0, month_trainees INTEGER DEFAULT 0
+                        date TEXT, 
+                        employee_name TEXT,
+                        invites INTEGER DEFAULT 0, 
+                        interviews INTEGER DEFAULT 0, 
+                        inner_ft INTEGER DEFAULT 0, 
+                        inner_pt INTEGER DEFAULT 0, 
+                        outer_ft INTEGER DEFAULT 0, 
+                        outer_pt INTEGER DEFAULT 0, 
+                        trainees INTEGER DEFAULT 0,
+                        month_invites INTEGER DEFAULT 0, 
+                        month_interviews INTEGER DEFAULT 0, 
+                        month_inner_ft INTEGER DEFAULT 0, 
+                        month_inner_pt INTEGER DEFAULT 0, 
+                        month_outer_ft INTEGER DEFAULT 0, 
+                        month_outer_pt INTEGER DEFAULT 0, 
+                        month_trainees INTEGER DEFAULT 0
                     )""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS users (
@@ -211,63 +221,48 @@ if not st.session_state.logged_in:
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
-
 # ---------------------------------------------------------
-# 4. 辅助函数与 Mock OCR
+# 4. 辅助函数与 Mock OCR (支持根据员工姓名生成伪动态差异数据)
 # ---------------------------------------------------------
-def mock_employee_ocr(image):
+def mock_employee_ocr(image, emp_name=""):
+    # 根据员工名字生成独特的 Hash 偏移，避免不同员工录入相同数值
+    seed = int(hashlib.md5(emp_name.encode('utf-8')).hexdigest(), 16) % 100 if emp_name else 0
     return {
-        "seen_me": 593,
-        "i_communicated": 319,
-        "received_resumes": 29,
-        "exchanged_contact": 14,
-        "exchanged_phone": 8,
-        "proposed_interview": 5,
-        "accepted_interview": 3,
+        "seen_me": 400 + seed * 3,
+        "i_communicated": 200 + seed * 2,
+        "received_resumes": 20 + (seed % 15),
+        "exchanged_contact": 10 + (seed % 8),
+        "exchanged_phone": 5 + (seed % 5),
+        "proposed_interview": 3 + (seed % 4),
+        "accepted_interview": 1 + (seed % 3),
     }
 
 
 def mock_supervisor_ocr_daily(image, members):
     return pd.DataFrame({
         "员工姓名": members,
-        "内单邀约": [4, 12, 1, 2, 8, 2, 1, 3, 0, 6, 4][: len(members)],
-        "外单邀约": [2, 5, 1, 1, 4, 1, 0, 1, 0, 3, 2][: len(members)],
-        "当日邀约总计": [6, 17, 2, 3, 12, 3, 1, 4, 0, 9, 6][: len(members)],
-        "内单到面": [7, 15, 6, 8, 20, 6, 12, 14, 0, 15, 13][: len(members)],
-        "外单到面": [4, 6, 3, 5, 10, 3, 6, 6, 0, 8, 7][: len(members)],
-        "当日到面总计": [11, 21, 9, 13, 30, 9, 18, 20, 0, 23, 20][
-            : len(members)
-        ],
-        "内单参培": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0][: len(members)],
-        "外单参培": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
-        "当日参培总计": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0][: len(members)],
+        "邀约数": [3, 11, 2, 5, 8, 2, 1, 3, 0, 6, 4][: len(members)],
+        "到面数": [1, 9, 3, 2, 6, 1, 2, 4, 0, 5, 3][: len(members)],
+        "参培数(内单全职)": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0][: len(members)],
+        "参培数(内单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
+        "参培数(外单全职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
+        "参培数(外单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
+        "参培数": [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0][: len(members)],
     })
 
 
 def mock_supervisor_ocr_monthly(image, members):
     return pd.DataFrame({
         "员工姓名": members,
-        "月内单邀约": [80, 140, 55, 60, 120, 50, 40, 70, 10, 90, 85][
+        "邀约数": [157, 465, 94, 107, 180, 75, 60, 110, 15, 140, 130][
             : len(members)
         ],
-        "月外单邀约": [40, 70, 30, 30, 60, 25, 20, 40, 5, 50, 45][
-            : len(members)
-        ],
-        "月度邀约总计": [120, 210, 85, 90, 180, 75, 60, 110, 15, 140, 130][
-            : len(members)
-        ],
-        "月内单到面": [50, 100, 32, 40, 85, 30, 22, 45, 3, 60, 55][
-            : len(members)
-        ],
-        "月外单到面": [30, 50, 18, 20, 45, 15, 13, 25, 2, 35, 30][
-            : len(members)
-        ],
-        "月度到面总计": [80, 150, 50, 60, 130, 45, 35, 70, 5, 95, 85][
-            : len(members)
-        ],
-        "月内单参培": [8, 15, 4, 5, 12, 3, 2, 7, 0, 10, 8][: len(members)],
-        "月外单参培": [4, 7, 2, 3, 7, 2, 2, 4, 0, 5, 4][: len(members)],
-        "月度参培总计": [12, 22, 6, 8, 19, 5, 4, 11, 0, 15, 12][: len(members)],
+        "到面数": [44, 209, 55, 47, 130, 45, 35, 70, 5, 95, 85][: len(members)],
+        "参培数(内单全职)": [8, 60, 4, 15, 12, 3, 2, 7, 0, 10, 8][: len(members)],
+        "参培数(内单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
+        "参培数(外单全职)": [2, 3, 0, 1, 7, 2, 2, 4, 0, 5, 4][: len(members)],
+        "参培数(外单兼职)": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][: len(members)],
+        "参培数": [10, 63, 4, 16, 19, 5, 4, 11, 0, 15, 12][: len(members)],
     })
 
 
@@ -288,15 +283,9 @@ def run_alert_engine(df_summary, is_monthly=False):
         comm = row.get("主动沟通", 0)
         resumes = row.get("收获简历", 0)
         wx = row.get("交换微信", 0)
-        invites = (
-            row.get("单月累计邀约", 0) if is_monthly else row.get("当日邀约", 0)
-        )
-        interviews = (
-            row.get("单月累计到面", 0) if is_monthly else row.get("当日到面", 0)
-        )
-        trainees = (
-            row.get("单月累计参培", 0) if is_monthly else row.get("当日参培", 0)
-        )
+        invites = row.get("邀约数", 0)
+        interviews = row.get("到面数", 0)
+        trainees = row.get("参培数", 0)
         time_tag = "全月" if is_monthly else "当日"
 
         if is_monthly and invites < 30:
@@ -452,7 +441,7 @@ if st.sidebar.button("🚪 退出登录"):
     st.rerun()
 
 # ---------------------------------------------------------
-# 模块一：员工端
+# 模块一：员工端（支持管理员代上传）
 # ---------------------------------------------------------
 if page == "📱 员工端：手机填报与截图上传":
     st.markdown(
@@ -467,7 +456,7 @@ if page == "📱 员工端：手机填报与截图上传":
         emp_name = st.session_state.real_name
         st.info(f"👤 填报员工：**{emp_name}**（自动绑定当前登录账号）")
     else:
-        emp_name = st.selectbox("选择填报员工", all_team_members, index=0)
+        emp_name = st.selectbox("选择填报/代传员工", all_team_members, index=0)
 
     record_date = st.date_input(
         "数据日期（默认昨天）", YESTERDAY, key="upload_date_picker"
@@ -503,7 +492,8 @@ if page == "📱 员工端：手机填报与截图上传":
             st.warning("⚠️ 请先选择并上传一张平台截图！")
         else:
             image = Image.open(uploaded_file)
-            ocr = mock_employee_ocr(image)
+            # 将选中的员工姓名传给 OCR 识图，保证代传各员工数据各不相同
+            ocr = mock_employee_ocr(image, emp_name=emp_name)
             with sqlite3.connect(DB_PATH) as conn:
                 c = conn.cursor()
                 c.execute(
@@ -532,7 +522,7 @@ if page == "📱 员工端：手机填报与截图上传":
             )
 
 # ---------------------------------------------------------
-# 模块二：数据看板
+# 模块二：数据看板（展示最新统一表头）
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown(
@@ -586,9 +576,13 @@ elif page == "📊 业务预警与数据看板":
             )
             df_perf = pd.read_sql_query(
                 """SELECT employee_name as 员工姓名, 
-                          MAX(month_inner_invites) as 月内单邀约, MAX(month_outer_invites) as 月外单邀约, MAX(month_invites) as 单月累计邀约,
-                          MAX(month_inner_interviews) as 月内单到面, MAX(month_outer_interviews) as 月外单到面, MAX(month_interviews) as 单月累计到面,
-                          MAX(month_inner_trainees) as 月内单参培, MAX(month_outer_trainees) as 月外单参培, MAX(month_trainees) as 单月累计参培
+                          MAX(month_invites) as 邀约数,
+                          MAX(month_interviews) as 到面数,
+                          MAX(month_inner_ft) as `参培数(内单全职)`,
+                          MAX(month_inner_pt) as `参培数(内单兼职)`,
+                          MAX(month_outer_ft) as `参培数(外单全职)`,
+                          MAX(month_outer_pt) as `参培数(外单兼职)`,
+                          MAX(month_trainees) as 参培数
                    FROM performance_data WHERE date LIKE ? GROUP BY employee_name""",
                 conn,
                 params=(date_filter_perf,),
@@ -606,9 +600,13 @@ elif page == "📊 业务预警与数据看板":
             )
             df_perf = pd.read_sql_query(
                 """SELECT employee_name as 员工姓名, 
-                          SUM(inner_invites) as 内单邀约, SUM(outer_invites) as 外单邀约, SUM(invites) as 当日邀约,
-                          SUM(inner_interviews) as 内单到面, SUM(outer_interviews) as 外单到面, SUM(interviews) as 当日到面,
-                          SUM(inner_trainees) as 内单参培, SUM(outer_trainees) as 外单参培, SUM(trainees) as 当日参培
+                          SUM(invites) as 邀约数,
+                          SUM(interviews) as 到面数,
+                          SUM(inner_ft) as `参培数(内单全职)`,
+                          SUM(inner_pt) as `参培数(内单兼职)`,
+                          SUM(outer_ft) as `参培数(外单全职)`,
+                          SUM(outer_pt) as `参培数(外单兼职)`,
+                          SUM(trainees) as 参培数
                    FROM performance_data WHERE date = ? GROUP BY employee_name""",
                 conn,
                 params=(date_filter_perf,),
@@ -622,13 +620,7 @@ elif page == "📊 业务预警与数据看板":
 
     df_summary["到面转化率数值"] = df_summary.apply(
         lambda r: (
-            (r["单月累计到面"] / r["单月累计邀约"] * 100)
-            if "单月" in view_mode and r.get("单月累计邀约", 0) > 0
-            else (
-                (r["当日到面"] / r["当日邀约"] * 100)
-                if r.get("当日邀约", 0) > 0
-                else 0.0
-            )
+            (r["到面数"] / r["邀约数"] * 100) if r.get("邀约数", 0) > 0 else 0.0
         ),
         axis=1,
     )
@@ -636,59 +628,32 @@ elif page == "📊 业务预警与数据看板":
         lambda x: f"{x:.1f}%"
     )
 
-    if "单月" in view_mode:
-        st.subheader(f"📆 招聘单月全链路累计汇总表 ({month_str})")
-        final_cols = [
-            "员工姓名",
-            "看过我",
-            "主动沟通",
-            "收获简历",
-            "交换微信",
-            "交换电话",
-            "拟约面",
-            "接受面试",
-            "月内单邀约",
-            "月外单邀约",
-            "单月累计邀约",
-            "月内单到面",
-            "月外单到面",
-            "单月累计到面",
-            "月内单参培",
-            "月外单参培",
-            "单月累计参培",
-            "到面转化率",
-        ]
-    else:
-        st.subheader(f"📋 招聘当日全链路数据整合表 ({date_str})")
-        final_cols = [
-            "员工姓名",
-            "看过我",
-            "主动沟通",
-            "收获简历",
-            "交换微信",
-            "交换电话",
-            "拟约面",
-            "接受面试",
-            "内单邀约",
-            "外单邀约",
-            "当日邀约",
-            "内单到面",
-            "外单到面",
-            "当日到面",
-            "内单参培",
-            "外单参培",
-            "当日参培",
-            "到面转化率",
-        ]
+    final_cols = [
+        "员工姓名",
+        "看过我",
+        "主动沟通",
+        "收获简历",
+        "交换微信",
+        "交换电话",
+        "拟约面",
+        "接受面试",
+        "邀约数",
+        "到面数",
+        "参培数(内单全职)",
+        "参培数(内单兼职)",
+        "参培数(外单全职)",
+        "参培数(外单兼职)",
+        "参培数",
+        "到面转化率",
+    ]
 
+    st.subheader(
+        f"📋 招聘全链路汇总表 ({month_str if '单月' in view_mode else date_str})"
+    )
     st.dataframe(df_summary[final_cols], height=200 if not is_admin else 350)
 
     st.markdown("##### 📥 导出数据")
     col_exp1, col_exp2 = st.columns([1, 1])
-
-    # 提取时间标识，避免 f-string 语法错误
-    time_tag_filename = month_str if "单月" in view_mode else date_str
-    export_file_name = f"招聘数据_{st.session_state.real_name}_{time_tag_filename}"
 
     with col_exp1:
         excel_buffer = io.BytesIO()
@@ -699,7 +664,10 @@ elif page == "📊 业务预警与数据看板":
         st.download_button(
             label="📊 导出 Excel 表格 (.xlsx)",
             data=excel_buffer.getvalue(),
-            file_name=f"{export_file_name}.xlsx",
+            file_name=(
+                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in"
+                f" view_mode else date_str}.xlsx"
+            ),
             mime=(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             ),
@@ -712,7 +680,10 @@ elif page == "📊 业务预警与数据看板":
         st.download_button(
             label="📄 导出 CSV 文件 (.csv)",
             data=csv_bytes,
-            file_name=f"{export_file_name}.csv",
+            file_name=(
+                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in"
+                f" view_mode else date_str}.csv"
+            ),
             mime="text/csv",
         )
 
@@ -735,23 +706,13 @@ elif page == "📊 业务预警与数据看板":
                 df_summary, "交换微信", "交换微信数量", "人"
             )
 
-        inv_col = "单月累计邀约" if "单月" in view_mode else "当日邀约"
-        int_col = "单月累计到面" if "单月" in view_mode else "当日到面"
-        tra_col = "单月累计参培" if "单月" in view_mode else "当日参培"
-
         p2_col1, p2_col2, p2_col3, p2_col4 = st.columns(4)
         with p2_col1:
-            render_full_ranking(
-                df_summary, inv_col, f"{inv_col}人数", "人"
-            )
+            render_full_ranking(df_summary, "邀约数", "邀约人数", "人")
         with p2_col2:
-            render_full_ranking(
-                df_summary, int_col, f"{int_col}人数", "人"
-            )
+            render_full_ranking(df_summary, "到面数", "到面人数", "人")
         with p2_col3:
-            render_full_ranking(
-                df_summary, tra_col, f"{tra_col}人数", "人"
-            )
+            render_full_ranking(df_summary, "参培数", "参培人数", "人")
         with p2_col4:
             render_full_ranking(
                 df_summary, "到面转化率数值", "到面转化率", "%"
@@ -778,7 +739,7 @@ elif page == "📊 业务预警与数据看板":
         st.success("🎉 数据表现正常，暂无过程卡点预警！")
 
 # ---------------------------------------------------------
-# 模块三：识图录入端（管理员专用）
+# 模块三：识图录入端（适配新表头）
 # ---------------------------------------------------------
 elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     st.markdown(
@@ -789,7 +750,7 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     col_type, col_date = st.columns(2)
     data_type = col_type.radio(
         "📌 选择上传的数据表类型：",
-        ["📅 日度新增业绩表", "📆 单月累计业绩表"],
+        ["📅 日度业绩表", "📆 单月累计业绩表"],
         horizontal=True,
     )
     p_date_img = col_date.date_input("选择业绩数据日期", YESTERDAY)
@@ -797,23 +758,22 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     st.write("---")
     if "日度" in data_type:
         daily_img = st.file_uploader(
-            "上传【日度】表格截图 (包含内单/外单)", type=["jpg", "png", "jpeg"]
+            "上传【日度】表格截图", type=["jpg", "png", "jpeg"]
         )
         if daily_img is not None:
             image = Image.open(daily_img)
             st.image(image, caption="已上传截图", width=400)
             df_extracted = mock_supervisor_ocr_daily(image, all_team_members)
-            st.info("💡 请在下方核对识图抓取结果，可直接在线修改：")
+            st.info(
+                "💡 请在下方核对识图抓取结果，参培数会自动根据 4 个拆分项计算合计："
+            )
 
             edited_df = st.data_editor(df_extracted, num_rows="dynamic")
-            edited_df["当日邀约总计"] = (
-                edited_df["内单邀约"] + edited_df["外单邀约"]
-            )
-            edited_df["当日到面总计"] = (
-                edited_df["内单到面"] + edited_df["外单到面"]
-            )
-            edited_df["当日参培总计"] = (
-                edited_df["内单参培"] + edited_df["外单参培"]
+            edited_df["参培数"] = (
+                edited_df["参培数(内单全职)"]
+                + edited_df["参培数(内单兼职)"]
+                + edited_df["参培数(外单全职)"]
+                + edited_df["参培数(外单兼职)"]
             )
 
             if st.button("💾 确认提交【日度】数据入库"):
@@ -823,20 +783,18 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
                     for idx, row in edited_df.iterrows():
                         c.execute(
                             """INSERT INTO performance_data 
-                               (date, employee_name, inner_invites, outer_invites, invites, inner_interviews, outer_interviews, interviews, inner_trainees, outer_trainees, trainees) 
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                               (date, employee_name, invites, interviews, inner_ft, inner_pt, outer_ft, outer_pt, trainees) 
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 date_str,
                                 row["员工姓名"],
-                                int(row["内单邀约"]),
-                                int(row["外单邀约"]),
-                                int(row["当日邀约总计"]),
-                                int(row["内单到面"]),
-                                int(row["外单到面"]),
-                                int(row["当日到面总计"]),
-                                int(row["内单参培"]),
-                                int(row["外单参培"]),
-                                int(row["当日参培总计"]),
+                                int(row["邀约数"]),
+                                int(row["到面数"]),
+                                int(row["参培数(内单全职)"]),
+                                int(row["参培数(内单兼职)"]),
+                                int(row["参培数(外单全职)"]),
+                                int(row["参培数(外单兼职)"]),
+                                int(row["参培数"]),
                             ),
                         )
                     conn.commit()
@@ -844,7 +802,7 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
                 st.success(f"🎉 成功保存 {date_str} 日度业绩数据！")
     else:
         monthly_img = st.file_uploader(
-            "上传【单月累计】表格截图 (包含内单/外单)", type=["jpg", "png", "jpeg"]
+            "上传【单月累计】表格截图", type=["jpg", "png", "jpeg"]
         )
         if monthly_img is not None:
             image = Image.open(monthly_img)
@@ -852,17 +810,16 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
             df_extracted = mock_supervisor_ocr_monthly(
                 image, all_team_members
             )
-            st.info("💡 请在下方核对识图抓取结果，可直接在线修改：")
+            st.info(
+                "💡 请在下方核对识图抓取结果，参培数会自动根据 4 个拆分项计算合计："
+            )
 
             edited_df = st.data_editor(df_extracted, num_rows="dynamic")
-            edited_df["月度邀约总计"] = (
-                edited_df["月内单邀约"] + edited_df["月外单邀约"]
-            )
-            edited_df["月度到面总计"] = (
-                edited_df["月内单到面"] + edited_df["月外单到面"]
-            )
-            edited_df["月度参培总计"] = (
-                edited_df["月内单参培"] + edited_df["月外单参培"]
+            edited_df["参培数"] = (
+                edited_df["参培数(内单全职)"]
+                + edited_df["参培数(内单兼职)"]
+                + edited_df["参培数(外单全职)"]
+                + edited_df["参培数(外单兼职)"]
             )
 
             if st.button("💾 确认提交【单月累计】数据入库"):
@@ -872,20 +829,18 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
                     for idx, row in edited_df.iterrows():
                         c.execute(
                             """INSERT INTO performance_data 
-                               (date, employee_name, month_inner_invites, month_outer_invites, month_invites, month_inner_interviews, month_outer_interviews, month_interviews, month_inner_trainees, month_outer_trainees, month_trainees) 
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                               (date, employee_name, month_invites, month_interviews, month_inner_ft, month_inner_pt, month_outer_ft, month_outer_pt, month_trainees) 
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                             (
                                 date_str,
                                 row["员工姓名"],
-                                int(row["月内单邀约"]),
-                                int(row["月外单邀约"]),
-                                int(row["月度邀约总计"]),
-                                int(row["月内单到面"]),
-                                int(row["月外单到面"]),
-                                int(row["月度到面总计"]),
-                                int(row["月内单参培"]),
-                                int(row["月外单参培"]),
-                                int(row["月度参培总计"]),
+                                int(row["邀约数"]),
+                                int(row["到面数"]),
+                                int(row["参培数(内单全职)"]),
+                                int(row["参培数(内单兼职)"]),
+                                int(row["参培数(外单全职)"]),
+                                int(row["参培数(外单兼职)"]),
+                                int(row["参培数"]),
                             ),
                         )
                     conn.commit()
@@ -893,7 +848,7 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
                 st.success(f"🎉 成功保存 {date_str} 月度业绩数据！")
 
 # ---------------------------------------------------------
-# 模块四：管理端（管理员专用）
+# 模块四：管理端
 # ---------------------------------------------------------
 elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
     st.markdown(
@@ -904,7 +859,6 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
     tab1, tab2 = st.tabs(["👤 员工与账号管理", "🗑️ 数据记录删除与维护"])
 
     with tab1:
-        # 1. 新增员工账号
         st.subheader("➕ 新增员工账号")
         col_u1, col_u2, col_u3, col_u4 = st.columns([1.5, 1.5, 1.5, 1])
         new_username = col_u1.text_input("登录账号 (如: zhangsan)")
@@ -932,7 +886,6 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
 
         st.write("---")
 
-        # 2. 现有人员与账号列表
         st.subheader("📋 现有人员与账号列表")
         with sqlite3.connect(DB_PATH) as conn:
             df_users = pd.read_sql_query(
@@ -941,7 +894,6 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
             )
         st.dataframe(df_users, use_container_width=True)
 
-        # 3. 编辑/修改账号信息与重置密码
         st.write("---")
         st.subheader("✏️ 修改账号信息 / 重置密码")
 
@@ -984,7 +936,6 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                 except sqlite3.IntegrityError:
                     st.error("❌ 更改后的登录账号与已有其他账号冲突！")
 
-        # 4. 删除员工账号
         st.write("---")
         st.subheader("🗑️ 删除员工账号")
         col_del_u, col_del_ubtn = st.columns([2, 1])
