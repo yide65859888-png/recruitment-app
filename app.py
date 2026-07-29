@@ -234,16 +234,84 @@ if not st.session_state.logged_in:
 # ---------------------------------------------------------
 # 4. 辅助函数与通义千问大模型 OCR
 # ---------------------------------------------------------
-def mock_employee_ocr(image):
-    return {
-        "seen_me": 593,
-        "i_communicated": 319,
-        "received_resumes": 29,
-        "exchanged_contact": 14,
-        "exchanged_phone": 8,
-        "proposed_interview": 5,
-        "accepted_interview": 3,
+def mock_employee_ocr(image: Image.Image) -> dict:
+    """使用 SiliconFlow 通义千问多模态模型识别员工端单张截图数据"""
+    default_result = {
+        "seen_me": 0,
+        "i_communicated": 0,
+        "received_resumes": 0,
+        "exchanged_contact": 0,
+        "exchanged_phone": 0,
+        "proposed_interview": 0,
+        "accepted_interview": 0,
     }
+    try:
+        client = OpenAI(
+            api_key=QWEN_CONFIG['api_key'], base_url=QWEN_CONFIG['base_url']
+        )
+
+        buffered = io.BytesIO()
+        image.save(buffered, format="PNG")
+        img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+        prompt = """
+        你是一个专业的数据提取助手。请仔细识别图片中招聘平台（如Boss直聘等）个人看板截图的数据。
+
+        【提取规则】：
+        1. 找到对应的数值：看过我、主动沟通（或沟通人数）、收获简历（或收到简历）、交换微信（或交换联系方式）、交换电话、拟约面（或提约面）、接受面试（或应约/同意面试）。
+        2. 如果图片中未包含某项或数值为空，请填 0。
+        3. 必须仅输出严格的 JSON 对象，不要包含 markdown 标签、解释文字或思考过程。
+
+        【输出 JSON 字段结构】：
+        {
+          "seen_me": 0,
+          "i_communicated": 0,
+          "received_resumes": 0,
+          "exchanged_contact": 0,
+          "exchanged_phone": 0,
+          "proposed_interview": 0,
+          "accepted_interview": 0
+        }
+        """
+
+        response = client.chat.completions.create(
+            model=QWEN_CONFIG['model'],
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
+                    },
+                ],
+            }],
+            temperature=0.1,
+            extra_body={"enable_thinking": QWEN_CONFIG['enable_thinking']},
+        )
+
+        content = response.choices[0].message.content.strip()
+
+        if content.startswith("```"):
+            lines = content.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            content = "\n".join(lines).strip()
+
+        data = json.loads(content)
+        for k in default_result:
+            if k in data:
+                try:
+                    default_result[k] = int(data[k])
+                except (ValueError, TypeError):
+                    default_result[k] = 0
+        return default_result
+
+    except Exception as e:
+        st.warning(f"⚠️ 视觉模型识别出现波动 ({e})，系统已采用缺省填报架构。")
+        return default_result
 
 
 def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
@@ -599,7 +667,8 @@ if page == "📱 员工端：手机填报与截图上传":
             st.warning("⚠️ 请先选择并上传一张平台截图！")
         else:
             image = Image.open(uploaded_file)
-            ocr = mock_employee_ocr(image)
+            with st.spinner("🤖 正在调用通义千问大模型提取截图数据，请稍候..."):
+                ocr = mock_employee_ocr(image)
             with sqlite3.connect(DB_PATH) as conn:
                 c = conn.cursor()
                 c.execute(
