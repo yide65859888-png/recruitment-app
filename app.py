@@ -2,6 +2,7 @@ import base64
 import datetime
 import io
 import json
+import re
 import sqlite3
 import pandas as pd
 from openai import OpenAI
@@ -96,15 +97,27 @@ DB_PATH = "recruitment_data.db"
 
 # 通义千问视觉识别配置
 QWEN_CONFIG = {
-    'api_key': 'sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy',
-    'base_url': 'https://api.siliconflow.cn/v1',
-    'model': 'Qwen/Qwen3.6-35B-A3B',
-    'enable_thinking': False,  # 关闭 Qwen3 思考模式，加快响应
+    "api_key": "sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy",
+    "base_url": "https://api.siliconflow.cn/v1",
+    "model": "Qwen/Qwen3.6-35B-A3B",
+    "enable_thinking": False,  # 关闭 Qwen3 思考模式，加快响应
 }
+
+# 移动端/PC端截屏需精准锚定的固定 8 个表头列表
+TARGET_HEADERS = [
+    "我看过",
+    "看过我",
+    "我打招呼",
+    "牛人新招呼",
+    "我沟通",
+    "收获简历",
+    "交换电话微信",
+    "接受面试",
+]
 
 
 # ---------------------------------------------------------
-# 2. 数据库初始化（升级为新表头架构）
+# 2. 数据库初始化
 # ---------------------------------------------------------
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
@@ -160,9 +173,7 @@ def init_db():
             )
 
         for name in DEFAULT_MEMBERS:
-            c.execute(
-                "SELECT COUNT(*) FROM users WHERE real_name = ?", (name,)
-            )
+            c.execute("SELECT COUNT(*) FROM users WHERE real_name = ?", (name,))
             if c.fetchone()[0] == 0:
                 c.execute(
                     "INSERT INTO users (username, password, real_name, role) VALUES (?, '123456', ?, 'employee')",
@@ -231,11 +242,12 @@ if not st.session_state.logged_in:
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
+
 # ---------------------------------------------------------
-# 4. 辅助函数与通义千问大模型 OCR
+# 4. 辅助函数与通义千问大模型 OCR (以 8 个固定表头精准锚定抓取)
 # ---------------------------------------------------------
 def mock_employee_ocr(image: Image.Image) -> dict:
-    """使用 SiliconFlow 通义千问多模态模型识别员工端单张截图数据"""
+    """接入通义千问大模型精准抓取截图数据，以固定8个数据表头为主锚点"""
     default_result = {
         "seen_me": 0,
         "i_communicated": 0,
@@ -247,7 +259,7 @@ def mock_employee_ocr(image: Image.Image) -> dict:
     }
     try:
         client = OpenAI(
-            api_key=QWEN_CONFIG['api_key'], base_url=QWEN_CONFIG['base_url']
+            api_key=QWEN_CONFIG["api_key"], base_url=QWEN_CONFIG["base_url"]
         )
 
         buffered = io.BytesIO()
@@ -255,39 +267,60 @@ def mock_employee_ocr(image: Image.Image) -> dict:
         img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
         prompt = """
-        你是一个专业的数据提取助手。请仔细识别图片中招聘平台（如Boss直聘等）个人看板截图的数据。
+        你是一个精准的数据提取与 OCR 视觉专家。图片中是招聘平台（如 Boss 直聘）的数据概览看板（可能来自于手机端或 PC 电脑端）。
 
-        【提取规则】：
-        1. 找到对应的数值：看过我、主动沟通（或沟通人数）、收获简历（或收到简历）、交换微信（或交换联系方式）、交换电话、拟约面（或提约面）、接受面试（或应约/同意面试）。
-        2. 如果图片中未包含某项或数值为空，请填 0。
-        3. 必须仅输出严格的 JSON 对象，不要包含 markdown 标签、解释文字或思考过程。
+        【必须提取的固定 8 个数据表头】：
+        1. 我看过
+        2. 看过我
+        3. 我打招呼
+        4. 牛人新招呼
+        5. 我沟通
+        6. 收获简历
+        7. 交换电话微信
+        8. 接受面试
 
-        【输出 JSON 字段结构】：
+        【精准抓取与识别规则】：
+        1. **基于表头强文本匹配（忽略坐标与位置）**：
+           手机端和 PC 端的排列顺序可能不一致，请先定位卡片上的表头文字（如“我看过”），然后读取该表头下方或侧边对应的**最大字号主数值**。
+        2. **彻底剔除干扰数据**：
+           - 忽略数值单位字符（如“人”、“份”等）。
+           - 忽略所有趋势/增减变动数据（如“较昨日 -18 >”、“较昨日 +5 >”等右侧或下方的小字）。
+        3. **缺省容错**：
+           如果图片中没有找到某个表头，或者对应数据为空，请填 0。
+        4. **输出格式要求**：
+           必须且只能输出严格的纯 JSON 格式，不要包含任何 markdown 标签（如 ```json）、注释说明或思考过程。
+
+        【标准输出示例】：
         {
-          "seen_me": 0,
-          "i_communicated": 0,
-          "received_resumes": 0,
-          "exchanged_contact": 0,
-          "exchanged_phone": 0,
-          "proposed_interview": 0,
-          "accepted_interview": 0
+          "我看过": 168,
+          "看过我": 368,
+          "我打招呼": 150,
+          "牛人新招呼": 47,
+          "我沟通": 184,
+          "收获简历": 7,
+          "交换电话微信": 16,
+          "接受面试": 0
         }
         """
 
         response = client.chat.completions.create(
-            model=QWEN_CONFIG['model'],
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-                    },
-                ],
-            }],
-            temperature=0.1,
-            extra_body={"enable_thinking": QWEN_CONFIG['enable_thinking']},
+            model=QWEN_CONFIG["model"],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_b64}"
+                            },
+                        },
+                    ],
+                }
+            ],
+            temperature=0.01,  # 接近 0 的随机度，确保识别结果极度稳定精准
+            extra_body={"enable_thinking": QWEN_CONFIG["enable_thinking"]},
         )
 
         content = response.choices[0].message.content.strip()
@@ -300,13 +333,24 @@ def mock_employee_ocr(image: Image.Image) -> dict:
                 lines = lines[:-1]
             content = "\n".join(lines).strip()
 
-        data = json.loads(content)
-        for k in default_result:
-            if k in data:
-                try:
-                    default_result[k] = int(data[k])
-                except (ValueError, TypeError):
-                    default_result[k] = 0
+        parsed_data = json.loads(content)
+
+        # 映射与 Python 正则提取纯数字二次强清洗
+        mapping = {
+            "看过我": "seen_me",
+            "我沟通": "i_communicated",
+            "收获简历": "received_resumes",
+            "交换电话微信": "exchanged_contact",
+            "接受面试": "accepted_interview",
+        }
+
+        for header_name, key_name in mapping.items():
+            if header_name in parsed_data:
+                raw_val = str(parsed_data[header_name])
+                match = re.search(r"\d+", raw_val)
+                if match:
+                    default_result[key_name] = int(match.group())
+
         return default_result
 
     except Exception as e:
@@ -318,7 +362,7 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
     """使用 SiliconFlow 通义千问多模态模型识别招聘数据表格"""
     try:
         client = OpenAI(
-            api_key=QWEN_CONFIG['api_key'], base_url=QWEN_CONFIG['base_url']
+            api_key=QWEN_CONFIG["api_key"], base_url=QWEN_CONFIG["base_url"]
         )
 
         buffered = io.BytesIO()
@@ -352,24 +396,27 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
         """
 
         response = client.chat.completions.create(
-            model=QWEN_CONFIG['model'],
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/png;base64,{img_b64}"},
-                    },
-                ],
-            }],
+            model=QWEN_CONFIG["model"],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_b64}"
+                            },
+                        },
+                    ],
+                }
+            ],
             temperature=0.1,
-            extra_body={"enable_thinking": QWEN_CONFIG['enable_thinking']},
+            extra_body={"enable_thinking": QWEN_CONFIG["enable_thinking"]},
         )
 
         content = response.choices[0].message.content.strip()
 
-        # 清理可能附带的 markdown 格式包裹
         if content.startswith("```"):
             lines = content.split("\n")
             if lines[0].startswith("```"):
@@ -406,7 +453,9 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
             "参培数(外单兼职)",
         ]
         for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+            df[col] = (
+                pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+            )
 
         df["参培数"] = (
             df["参培数(内单全职)"]
@@ -428,7 +477,9 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
         ]
 
     except Exception as e:
-        st.error(f"⚠️ 大模型识别出现异常 ({e})，已切换至基础表结构，请手动补全修改。")
+        st.error(
+            f"⚠️ 大模型识别出现异常 ({e})，已切换至基础表结构，请手动补全修改。"
+        )
         return pd.DataFrame({
             "员工姓名": members,
             "邀约数": 0,
@@ -468,7 +519,10 @@ def run_alert_engine(df_summary, is_monthly=False):
                 "name": name,
                 "level": "🚨 产能预警：月度招聘产能严重不足",
                 "issue": f"{time_tag}累计邀约仅 {invites} 人，到面 {interviews} 人",
-                "data": f"月邀约 {invites} 人 ➔ 到面 {interviews} 人 ➔ 参培 {trainees} 人",
+                "data": (
+                    f"月邀约 {invites} 人 ➔ 到面 {interviews} 人 ➔ 参培"
+                    f" {trainees} 人"
+                ),
                 "reason": (
                     "月度整体招聘动作极少，业务活动量严重不达标，未能建立起有效的招聘漏斗基数"
                 ),
@@ -498,7 +552,9 @@ def run_alert_engine(df_summary, is_monthly=False):
             alerts.append({
                 "name": name,
                 "level": "⚠️ 跟进预警：私域候选人转化滞后",
-                "issue": f"{time_tag}获取微信 {wx} 个，但实际邀约仅 {invites} 人",
+                "issue": (
+                    f"{time_tag}获取微信 {wx} 个，但实际邀约仅 {invites} 人"
+                ),
                 "data": f"微信 {wx} 人 ➔ 邀约 {invites} 人",
                 "reason": (
                     "私域留存资源较丰富但尚未形成有效约面，可能存在跟进及时性不足或约面促成临门一脚欠缺"
@@ -517,7 +573,10 @@ def run_alert_engine(df_summary, is_monthly=False):
             alerts.append({
                 "name": name,
                 "level": "🚨 转化预警：到面至参培漏斗断层",
-                "issue": f"{time_tag}到面 {interviews} 人，但参培仅 {trainees} 人 (转化率仅 {trainee_rate:.1f}%)",
+                "issue": (
+                    f"{time_tag}到面 {interviews} 人，但参培仅 {trainees} 人"
+                    f" (转化率仅 {trainee_rate:.1f}%)"
+                ),
                 "data": f"到面 {interviews} 人 ➔ 参培仅 {trainees} 人",
                 "reason": (
                     "到场人数较多但后续参培流失率极高，可能存在前期求职意向确认不足、或现场宣讲/面试预期管理差距较大"
@@ -631,7 +690,9 @@ if page == "📱 员工端：手机填报与截图上传":
         emp_name = st.session_state.real_name
         st.info(f"👤 填报员工：**{emp_name}**（自动绑定当前登录账号）")
     else:
-        emp_name = st.selectbox("👤 选择填报员工（管理员代传模式）", all_team_members, index=0)
+        emp_name = st.selectbox(
+            "👤 选择填报员工（管理员代传模式）", all_team_members, index=0
+        )
 
     record_date = st.date_input(
         "数据日期（默认昨天）", YESTERDAY, key="upload_date_picker"
@@ -667,7 +728,9 @@ if page == "📱 员工端：手机填报与截图上传":
             st.warning("⚠️ 请先选择并上传一张平台截图！")
         else:
             image = Image.open(uploaded_file)
-            with st.spinner("🤖 正在调用通义千问大模型提取截图数据，请稍候..."):
+            with st.spinner(
+                "🤖 正在调用通义千问大模型精准抓取截图数据，请稍候..."
+            ):
                 ocr = mock_employee_ocr(image)
             with sqlite3.connect(DB_PATH) as conn:
                 c = conn.cursor()
@@ -697,7 +760,7 @@ if page == "📱 员工端：手机填报与截图上传":
             )
 
 # ---------------------------------------------------------
-# 模块二：数据看板（展示最新统一表头 + 支持合计）
+# 模块二：数据看板
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown(
@@ -800,9 +863,6 @@ elif page == "📊 业务预警与数据看板":
         axis=1,
     )
 
-    # ---------------------------------------------------------
-    # ✨ 新增：自动计算并追加“合计”行
-    # ---------------------------------------------------------
     numeric_cols_to_sum = [
         "看过我",
         "主动沟通",
@@ -947,7 +1007,7 @@ elif page == "📊 业务预警与数据看板":
         st.success("🎉 数据表现正常，暂无过程卡点预警！")
 
 # ---------------------------------------------------------
-# 模块三：识图录入端（已接入通义千问视觉识别 API）
+# 模块三：识图录入端
 # ---------------------------------------------------------
 elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     st.markdown(
@@ -972,7 +1032,9 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
             image = Image.open(daily_img)
             st.image(image, caption="已上传截图", width=400)
 
-            with st.spinner("🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."):
+            with st.spinner(
+                "🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."
+            ):
                 df_extracted = llm_supervisor_ocr(image, all_team_members)
 
             st.info(
@@ -1019,7 +1081,9 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
             image = Image.open(monthly_img)
             st.image(image, caption="已上传截图", width=400)
 
-            with st.spinner("🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."):
+            with st.spinner(
+                "🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."
+            ):
                 df_extracted = llm_supervisor_ocr(image, all_team_members)
 
             st.info(
