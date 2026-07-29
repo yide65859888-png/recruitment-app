@@ -96,9 +96,9 @@ DB_PATH = "recruitment_data.db"
 
 # 通义千问视觉识别配置（阿里云百炼平台）
 QWEN_CONFIG = {
-    'api_key': 'sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy',
-    'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    'model': 'qwen-vl-max',
+      'api_key': 'sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy',
+    'base_url': 'https://api.siliconflow.cn/v1',
+    'model': 'Qwen/Qwen3.6-35B-A3B',
 }
 
 
