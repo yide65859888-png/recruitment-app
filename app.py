@@ -335,7 +335,7 @@ def mock_employee_ocr(image: Image.Image) -> dict:
 
 
 def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
-    """使用 SiliconFlow 通义千问多模态模型识别招聘数据表格"""
+    """使用 SiliconFlow 通义千问多模态模型识别招聘数据表格（含自动对齐与长度校验防报错）"""
     try:
         client = OpenAI(
             api_key=QWEN_CONFIG["api_key"], base_url=QWEN_CONFIG["base_url"]
@@ -348,7 +348,14 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
         prompt = f"""
         你是一个专业的数据提取助手。请仔细识别图片中表格包含的招聘数据。
         【目标员工列表】：{json.dumps(members, ensure_ascii=False)}
-        必须只输出严格的 JSON 数组结构。
+        必须只输出严格的 JSON 数组结构，数组中每个元素为一个对象，包含以下键：
+        - "员工姓名"
+        - "邀约数"
+        - "到面数"
+        - "参培数(内单全职)"
+        - "参培数(内单兼职)"
+        - "参培数(外单全职)"
+        - "参培数(外单兼职)"
         """
 
         response = client.chat.completions.create(
@@ -379,30 +386,71 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
             content = "\n".join(lines).strip()
 
         data_list = json.loads(content)
-        df = pd.DataFrame(data_list)
+        df_raw = pd.DataFrame(data_list)
 
+        # ---------------------------------------------------------
+        # 防错对齐核心逻辑：以完整员工列表 (members) 为标准基准表进行 merge
+        # ---------------------------------------------------------
+        base_df = pd.DataFrame({"员工姓名": members})
+
+        if "员工姓名" in df_raw.columns:
+            # 确保姓名格式一致，去空格
+            df_raw["员工姓名"] = df_raw["员工姓名"].astype(str).str.strip()
+            df = pd.merge(base_df, df_raw, on="员工姓名", how="left")
+        else:
+            df = base_df.copy()
+
+        # 填充缺省列与缺失值
         required_cols = [
-            "员工姓名", "邀约数", "到面数", 
-            "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)"
+            "邀约数",
+            "到面数",
+            "参培数(内单全职)",
+            "参培数(内单兼职)",
+            "参培数(外单全职)",
+            "参培数(外单兼职)",
         ]
         for col in required_cols:
             if col not in df.columns:
-                df[col] = members if col == "员工姓名" else 0
+                df[col] = 0
+            df[col] = (
+                pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+            )
 
-        numeric_cols = ["邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)"]
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+        # 重新计算合计参培数
+        df["参培数"] = (
+            df["参培数(内单全职)"]
+            + df["参培数(内单兼职)"]
+            + df["参培数(外单全职)"]
+            + df["参培数(外单兼职)"]
+        )
 
-        df["参培数"] = df["参培数(内单全职)"] + df["参培数(内单兼职)"] + df["参培数(外单全职)"] + df["参培数(外单兼职)"]
-        return df[["员工姓名", "邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)", "参培数"]]
+        return df[
+            [
+                "员工姓名",
+                "邀约数",
+                "到面数",
+                "参培数(内单全职)",
+                "参培数(内单兼职)",
+                "参培数(外单全职)",
+                "参培数(外单兼职)",
+                "参培数",
+            ]
+        ]
 
     except Exception as e:
         st.error(f"⚠️ 大模型识别出现异常 ({e})，已切换至基础表结构。")
-        return pd.DataFrame({
-            "员工姓名": members, "邀约数": 0, "到面数": 0,
-            "参培数(内单全职)": 0, "参培数(内单兼职)": 0,
-            "参培数(外单全职)": 0, "参培数(外单兼职)": 0, "参培数": 0,
-        })
+        return pd.DataFrame(
+            {
+                "员工姓名": members,
+                "邀约数": 0,
+                "到面数": 0,
+                "参培数(内单全职)": 0,
+                "参培数(内单兼职)": 0,
+                "参培数(外单全职)": 0,
+                "参培数(外单兼职)": 0,
+                "参培数": 0,
+            }
+        )
 
 
 def check_existing_record(date_str, emp_name, platform):
@@ -588,7 +636,6 @@ if page == "📱 员工端：手机填报与截图上传":
             st.success(f"🎉 提交成功！[{emp_name}] 在 [{date_str}] 的 [{platform_ver}] 数据已更新覆盖！")
             st.rerun()
 
-    # --- 优化需求2：展示历史上传数据信息与删除操作 ---
     st.write("---")
     st.subheader("📜 个人历史数据上传记录与维护")
     with sqlite3.connect(DB_PATH) as conn:
@@ -601,7 +648,6 @@ if page == "📱 员工端：手机填报与截图上传":
         )
 
     if not emp_records_df.empty:
-        # 序号设为从 1 开始
         emp_records_df.index = range(1, len(emp_records_df) + 1)
         st.dataframe(emp_records_df, use_container_width=True)
 
@@ -724,7 +770,6 @@ elif page == "📊 业务预警与数据看板":
 
     st.subheader(f"📋 招聘全链路汇总表 ({month_str if '单月' in view_mode else date_str})")
 
-    # --- 优化需求3：显示表格索引序列号从 1 开始 ---
     df_board_show = df_display[final_cols].copy()
     df_board_show.index = range(1, len(df_board_show) + 1)
     st.dataframe(df_board_show, height=250 if not is_admin else 400, use_container_width=True)
@@ -843,7 +888,6 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
             st.success(f"🎉 成功更新覆盖 {date_str} 的{img_type_label}业绩数据！")
             st.rerun()
 
-    # --- 优化需求1：新增数据查询与单条/同批删除功能 ---
     st.write("---")
     st.subheader("🔍 历史业绩数据查询与单条删除维护")
     with sqlite3.connect(DB_PATH) as conn:
@@ -856,7 +900,6 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
         )
 
     if not perf_records_df.empty:
-        # 序号统一改为从 1 开始
         perf_records_df.index = range(1, len(perf_records_df) + 1)
         st.dataframe(perf_records_df, use_container_width=True)
 
