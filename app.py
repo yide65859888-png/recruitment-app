@@ -124,12 +124,13 @@ TARGET_HEADERS = [
 
 
 # ---------------------------------------------------------
-# 2. 数据库初始化
+# 2. 数据库初始化 (含自动补齐/升级旧数据库字段逻辑)
 # ---------------------------------------------------------
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
 
+        # 1. 基础建表
         c.execute("""CREATE TABLE IF NOT EXISTS platform_data (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         date TEXT, 
@@ -146,6 +147,28 @@ def init_db():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(date, employee_name, platform_version)
                     )""")
+
+        # 2. 自动检查并补全旧表可能缺失的新字段（彻底解决 no such column 报错）
+        c.execute("PRAGMA table_info(platform_data)")
+        existing_cols = [col[1] for col in c.fetchall()]
+
+        required_cols = {
+            "i_looked": "INTEGER DEFAULT 0",
+            "seen_me": "INTEGER DEFAULT 0",
+            "i_greeted": "INTEGER DEFAULT 0",
+            "candidate_greeted": "INTEGER DEFAULT 0",
+            "i_communicated": "INTEGER DEFAULT 0",
+            "received_resumes": "INTEGER DEFAULT 0",
+            "exchanged_contact": "INTEGER DEFAULT 0",
+            "accepted_interview": "INTEGER DEFAULT 0",
+        }
+
+        for col_name, col_type in required_cols.items():
+            if col_name not in existing_cols:
+                try:
+                    c.execute(f"ALTER TABLE platform_data ADD COLUMN {col_name} {col_type}")
+                except Exception:
+                    pass
 
         c.execute("""CREATE TABLE IF NOT EXISTS performance_data (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
