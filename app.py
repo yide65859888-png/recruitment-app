@@ -124,13 +124,12 @@ TARGET_HEADERS = [
 
 
 # ---------------------------------------------------------
-# 2. 数据库初始化 (含自动补齐/升级旧数据库字段逻辑)
+# 2. 数据库初始化
 # ---------------------------------------------------------
 def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
 
-        # 1. 基础建表
         c.execute("""CREATE TABLE IF NOT EXISTS platform_data (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         date TEXT, 
@@ -148,7 +147,6 @@ def init_db():
                         UNIQUE(date, employee_name, platform_version)
                     )""")
 
-        # 2. 自动检查并补全旧表可能缺失的新字段（彻底解决 no such column 报错）
         c.execute("PRAGMA table_info(platform_data)")
         existing_cols = [col[1] for col in c.fetchall()]
 
@@ -226,7 +224,7 @@ def get_all_employee_names():
 
 
 # ---------------------------------------------------------
-# 3. 登录认证逻辑与 Session 状态（已修复点击多次问题）
+# 3. 登录认证逻辑与 Session 状态
 # ---------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -238,7 +236,6 @@ if "logged_in" not in st.session_state:
 def verify_login(username, password):
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
-        # 增加 strip() 清除空格，防止隐形字符干扰
         c.execute(
             "SELECT username, real_name, role FROM users WHERE username = ? AND password = ?",
             (username.strip(), password.strip()),
@@ -255,7 +252,6 @@ if not st.session_state.logged_in:
     login_col1, login_col2, login_col3 = st.columns([1, 1.5, 1])
     with login_col2:
         st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
-        # 封装至 st.form 中，保证输入框值同步及回车提交
         with st.form(key="login_form", clear_on_submit=False):
             login_user = st.text_input("账号 / 员工姓名")
             login_pwd = st.text_input("密码", type="password")
@@ -280,7 +276,7 @@ if not st.session_state.logged_in:
 
 
 # ---------------------------------------------------------
-# 4. 辅助函数与通义千问大模型 OCR
+# 4. 辅助函数与视觉 AI OCR
 # ---------------------------------------------------------
 def mock_employee_ocr(image: Image.Image) -> dict:
     """接入通义千问大模型精准抓取截图数据，以固定8个数据表头为主锚点"""
@@ -614,7 +610,7 @@ if st.sidebar.button("🚪 退出登录"):
     st.rerun()
 
 # ---------------------------------------------------------
-# 模块一：员工端（包含历史记录与删除管理）
+# 模块一：员工端
 # ---------------------------------------------------------
 if page == "📱 员工端：手机填报与截图上传":
     st.markdown("<div class='main-header'>📱 员工每日平台数据快捷填报</div>", unsafe_allow_html=True)
@@ -711,7 +707,7 @@ if page == "📱 员工端：手机填报与截图上传":
         st.info("ℹ️ 暂无历史上传记录。")
 
 # ---------------------------------------------------------
-# 模块二：数据看板
+# 模块二：数据看板（包含最新 9 大 KPI 指标排名区）
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown("<div class='main-header'>📊 招聘全链路过程数据监控看板</div>", unsafe_allow_html=True)
@@ -836,20 +832,30 @@ elif page == "📊 业务预警与数据看板":
             mime="text/csv",
         )
 
+    # ---------------------------------------------------------
+    # 📌 精简后的 9 大 KPI 团队排名面板
+    # ---------------------------------------------------------
     if is_admin and len(df_summary) > 1:
         st.write("---")
-        st.subheader("📊 招聘关键过程指标 (KPI) 团队排名")
-        p1_col1, p1_col2, p1_col3, p1_col4 = st.columns(4)
-        with p1_col1: render_full_ranking(df_summary, "我看过", "我看过人数", "人")
-        with p1_col2: render_full_ranking(df_summary, "看过我", "看过我人数", "人")
-        with p1_col3: render_full_ranking(df_summary, "我打招呼", "我打招呼次数", "次")
-        with p1_col4: render_full_ranking(df_summary, "牛人新招呼", "牛人新招呼数", "个")
+        st.subheader("📊 招聘关键过程与结果指标团队排名")
 
-        p2_col1, p2_col2, p2_col3, p2_col4 = st.columns(4)
-        with p2_col1: render_full_ranking(df_summary, "我沟通", "我沟通人数", "人")
-        with p2_col2: render_full_ranking(df_summary, "收获简历", "收获简历数量", "份")
-        with p2_col3: render_full_ranking(df_summary, "交换电话微信", "交换电话微信数", "人")
-        with p2_col4: render_full_ranking(df_summary, "接受面试", "接受面试人数", "人")
+        # 第一排：曝光与主动动作（3个）
+        r1_col1, r1_col2, r1_col3 = st.columns(3)
+        with r1_col1: render_full_ranking(df_summary, "看过我", "看过我人数", "人")
+        with r1_col2: render_full_ranking(df_summary, "我打招呼", "我打招呼次数", "次")
+        with r1_col3: render_full_ranking(df_summary, "牛人新招呼", "牛人新招呼数", "个")
+
+        # 第二排：沟通与留存转化（3个）
+        r2_col1, r2_col2, r2_col3 = st.columns(3)
+        with r2_col1: render_full_ranking(df_summary, "我沟通", "我沟通人数", "人")
+        with r2_col2: render_full_ranking(df_summary, "交换电话微信", "交换电话微信数", "人")
+        with r2_col3: render_full_ranking(df_summary, "收获简历", "收获简历数量", "份")
+
+        # 第三排：邀约与终局结果（3个）
+        r3_col1, r3_col2, r3_col3 = st.columns(3)
+        with r3_col1: render_full_ranking(df_summary, "邀约数", "新增邀约数", "人")
+        with r3_col2: render_full_ranking(df_summary, "到面数", "到面数", "人")
+        with r3_col3: render_full_ranking(df_summary, "参培数", "参培数", "人")
 
     st.write("---")
     st.subheader("🚨 智能过程漏斗卡点诊断与预警")
@@ -865,7 +871,7 @@ elif page == "📊 业务预警与数据看板":
         st.success("🎉 数据表现正常，暂无过程卡点预警！")
 
 # ---------------------------------------------------------
-# 模块三：数据端（含智能识图覆盖写入与历史修改/删除）
+# 模块三：数据端
 # ---------------------------------------------------------
 elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
     st.markdown("<div class='main-header'>📋 数据端：部门业绩汇总与智能识图录入 (管理员专用)</div>", unsafe_allow_html=True)
@@ -963,7 +969,7 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
         st.info("ℹ️ 暂无历史业绩表数据。")
 
 # ---------------------------------------------------------
-# 模块四：管理端（后台管理与记录维护）
+# 模块四：管理端
 # ---------------------------------------------------------
 elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
     st.markdown("<div class='main-header'>⚙️ 后台管理中心 (管理员权限)</div>", unsafe_allow_html=True)
