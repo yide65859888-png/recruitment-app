@@ -91,8 +91,18 @@ DEFAULT_MEMBERS = [
     "薛丽丽",
 ]
 
+# 扩充多账号平台选项
+PLATFORM_OPTIONS = [
+    "易德Boss1号",
+    "易德Boss2号",
+    "易德Boss3号",
+    "呼叫中心Boss",
+    "人保Boss",
+    "智联招聘",
+    "51job",
+]
+
 YESTERDAY = datetime.date.today() - datetime.timedelta(days=1)
-MAX_DAILY_UPLOADS = 3
 DB_PATH = "recruitment_data.db"
 
 # 通义千问视觉识别配置
@@ -103,7 +113,6 @@ QWEN_CONFIG = {
     "enable_thinking": False,  # 关闭 Qwen3 思考模式，加快响应
 }
 
-# 移动端/PC端截屏需精准锚定的固定 8 个表头列表
 TARGET_HEADERS = [
     "我看过",
     "看过我",
@@ -123,6 +132,7 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
 
+        # 对 date, employee_name, platform_version 建立联合唯一约束，支持 REPLACE INTO 覆盖操作
         c.execute("""CREATE TABLE IF NOT EXISTS platform_data (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         date TEXT, 
@@ -135,7 +145,8 @@ def init_db():
                         exchanged_phone INTEGER DEFAULT 0, 
                         proposed_interview INTEGER DEFAULT 0,
                         accepted_interview INTEGER DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(date, employee_name, platform_version)
                     )""")
 
         c.execute("""CREATE TABLE IF NOT EXISTS performance_data (
@@ -244,7 +255,7 @@ if not st.session_state.logged_in:
 
 
 # ---------------------------------------------------------
-# 4. 辅助函数与通义千问大模型 OCR (以 8 个固定表头精准锚定抓取)
+# 4. 辅助函数与通义千问大模型 OCR
 # ---------------------------------------------------------
 def mock_employee_ocr(image: Image.Image) -> dict:
     """接入通义千问大模型精准抓取截图数据，以固定8个数据表头为主锚点"""
@@ -319,7 +330,7 @@ def mock_employee_ocr(image: Image.Image) -> dict:
                     ],
                 }
             ],
-            temperature=0.01,  # 接近 0 的随机度，确保识别结果极度稳定精准
+            temperature=0.01,
             extra_body={"enable_thinking": QWEN_CONFIG["enable_thinking"]},
         )
 
@@ -335,7 +346,6 @@ def mock_employee_ocr(image: Image.Image) -> dict:
 
         parsed_data = json.loads(content)
 
-        # 映射与 Python 正则提取纯数字二次强清洗
         mapping = {
             "看过我": "seen_me",
             "我沟通": "i_communicated",
@@ -492,14 +502,16 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
         })
 
 
-def get_upload_count_today(date_str, emp_name, platform):
+def check_existing_record(date_str, emp_name, platform):
+    """检测当前日期、员工、平台是否已有提交记录"""
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
         c.execute(
-            "SELECT COUNT(*) FROM platform_data WHERE date = ? AND employee_name = ? AND platform_version = ?",
+            "SELECT created_at FROM platform_data WHERE date = ? AND employee_name = ? AND platform_version = ?",
             (date_str, emp_name, platform),
         )
-        return c.fetchone()[0]
+        res = c.fetchone()
+        return res[0] if res else None
 
 
 def run_alert_engine(df_summary, is_monthly=False):
@@ -675,7 +687,7 @@ if st.sidebar.button("🚪 退出登录"):
     st.rerun()
 
 # ---------------------------------------------------------
-# 模块一：员工端
+# 模块一：员工端（实现自动替换逻辑）
 # ---------------------------------------------------------
 if page == "📱 员工端：手机填报与截图上传":
     st.markdown(
@@ -697,11 +709,17 @@ if page == "📱 员工端：手机填报与截图上传":
     record_date = st.date_input(
         "数据日期（默认昨天）", YESTERDAY, key="upload_date_picker"
     )
+    date_str = record_date.strftime("%Y-%m-%d")
 
-    platform_ver = st.selectbox(
-        "选择账号版本/平台",
-        ["易德Boss", "呼叫中心Boss", "人保Boss", "智联招聘", "51job"],
-    )
+    platform_ver = st.selectbox("选择账号版本/平台", PLATFORM_OPTIONS)
+
+    existing_time = check_existing_record(date_str, emp_name, platform_ver)
+    if existing_time:
+        st.info(
+            f"💡 提示：检测到您在 **{date_str}** 已提交过 **[{platform_ver}]** 的数据（提交时间："
+            f" {existing_time}）。**再次提交将自动覆盖替换上一张数据**。"
+        )
+
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
@@ -714,17 +732,7 @@ if page == "📱 员工端：手机填报与截图上传":
     submit_btn = st.button("🚀 立即提交保存", type="primary")
 
     if submit_btn:
-        date_str = record_date.strftime("%Y-%m-%d")
-        current_count = get_upload_count_today(
-            date_str, emp_name, platform_ver
-        )
-        if current_count >= MAX_DAILY_UPLOADS:
-            st.error(
-                f"🛑 上传受限：【{emp_name}】在【{date_str}】对【{platform_ver}】已提交过"
-                f" {current_count} 次，触发每日上限（最多"
-                f" {MAX_DAILY_UPLOADS} 次）！如有误填请联系管理员。"
-            )
-        elif uploaded_file is None:
+        if uploaded_file is None:
             st.warning("⚠️ 请先选择并上传一张平台截图！")
         else:
             image = Image.open(uploaded_file)
@@ -732,12 +740,14 @@ if page == "📱 员工端：手机填报与截图上传":
                 "🤖 正在调用通义千问大模型精准抓取截图数据，请稍候..."
             ):
                 ocr = mock_employee_ocr(image)
+
             with sqlite3.connect(DB_PATH) as conn:
                 c = conn.cursor()
+                # 借助 REPLACE INTO：如果 (date, employee_name, platform_version) 冲突，自动覆盖上一条记录
                 c.execute(
-                    """INSERT INTO platform_data 
-                       (date, employee_name, platform_version, seen_me, i_communicated, received_resumes, exchanged_contact, exchanged_phone, proposed_interview, accepted_interview)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    """INSERT OR REPLACE INTO platform_data 
+                       (date, employee_name, platform_version, seen_me, i_communicated, received_resumes, exchanged_contact, exchanged_phone, proposed_interview, accepted_interview, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
                     (
                         date_str,
                         emp_name,
@@ -754,13 +764,12 @@ if page == "📱 员工端：手机填报与截图上传":
                 conn.commit()
             st.balloons()
             st.success(
-                f"🎉 提交成功！[{emp_name}] 的 [{date_str}] [{platform_ver}]"
-                f" 数据已保存！（当日已提交"
-                f" {current_count + 1}/{MAX_DAILY_UPLOADS} 次）"
+                f"🎉 提交成功！[{emp_name}] 在 [{date_str}] 的 [{platform_ver}]"
+                " 数据已更新覆盖！"
             )
 
 # ---------------------------------------------------------
-# 模块二：数据看板
+# 模块二：数据看板（支持多账号数据聚合）
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown(
@@ -802,6 +811,7 @@ elif page == "📊 业务预警与数据看板":
 
     with sqlite3.connect(DB_PATH) as conn:
         if "单月" in view_mode:
+            # GROUP BY employee_name 实现同一个员工多个账号平台的数据求和汇总
             df_p = pd.read_sql_query(
                 "SELECT employee_name as 员工姓名, SUM(seen_me) as 看过我,"
                 " SUM(i_communicated) as 主动沟通, SUM(received_resumes) as"
@@ -1237,9 +1247,9 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
         st.subheader("📋 所有平台上传记录维护")
         with sqlite3.connect(DB_PATH) as conn:
             df_records = pd.read_sql_query(
-                """SELECT id as 记录编号, date as 归属日期, employee_name as 员工姓名, platform_version as 平台,
+                """SELECT id as 记录编号, date as 归属日期, employee_name as 员工姓名, platform_version as 平台账号,
                           seen_me as 看过我, i_communicated as 主动沟通, received_resumes as 收到简历,
-                          exchanged_contact as 微信, exchanged_phone as 电话, created_at as 提交时间
+                          exchanged_contact as 微信, exchanged_phone as 电话, created_at as 更新时间
                    FROM platform_data ORDER BY id DESC""",
                 conn,
             )
@@ -1265,7 +1275,7 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                 selected_id = col_del_id.selectbox(
                     "选择需要删除的记录编号 (ID):",
                     options=record_options,
-                    format_func=lambda x: f"编号 #{x} | {df_show[df_show['记录编号']==x]['归属日期'].values[0]} | {df_show[df_show['记录编号']==x]['员工姓名'].values[0]} | {df_show[df_show['记录编号']==x]['平台'].values[0]}",
+                    format_func=lambda x: f"编号 #{x} | {df_show[df_show['记录编号']==x]['归属日期'].values[0]} | {df_show[df_show['记录编号']==x]['员工姓名'].values[0]} | {df_show[df_show['记录编号']==x]['平台账号'].values[0]}",
                 )
                 if col_del_btn.button("🔥 确认删除记录", type="primary"):
                     with sqlite3.connect(DB_PATH) as conn:
