@@ -135,12 +135,13 @@ def init_db():
                         date TEXT, 
                         employee_name TEXT, 
                         platform_version TEXT,
+                        i_looked INTEGER DEFAULT 0,
                         seen_me INTEGER DEFAULT 0, 
+                        i_greeted INTEGER DEFAULT 0,
+                        candidate_greeted INTEGER DEFAULT 0,
                         i_communicated INTEGER DEFAULT 0,
                         received_resumes INTEGER DEFAULT 0, 
                         exchanged_contact INTEGER DEFAULT 0,
-                        exchanged_phone INTEGER DEFAULT 0, 
-                        proposed_interview INTEGER DEFAULT 0,
                         accepted_interview INTEGER DEFAULT 0,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         UNIQUE(date, employee_name, platform_version)
@@ -255,12 +256,13 @@ if not st.session_state.logged_in:
 def mock_employee_ocr(image: Image.Image) -> dict:
     """接入通义千问大模型精准抓取截图数据，以固定8个数据表头为主锚点"""
     default_result = {
+        "i_looked": 0,
         "seen_me": 0,
+        "i_greeted": 0,
+        "candidate_greeted": 0,
         "i_communicated": 0,
         "received_resumes": 0,
         "exchanged_contact": 0,
-        "exchanged_phone": 0,
-        "proposed_interview": 0,
         "accepted_interview": 0,
     }
     try:
@@ -279,7 +281,17 @@ def mock_employee_ocr(image: Image.Image) -> dict:
         1. 我看过  2. 看过我  3. 我打招呼  4. 牛人新招呼  5. 我沟通  6. 收获简历  7. 交换电话微信  8. 接受面试
 
         【输出格式要求】：
-        必须且只能输出严格的纯 JSON 格式，不要包含任何 markdown 标签或多余文字。
+        必须且只能输出严格的纯 JSON 格式，不要包含任何 markdown 标签或多余文字。例如：
+        {
+            "我看过": 27,
+            "看过我": 268,
+            "我打招呼": 113,
+            "牛人新招呼": 27,
+            "我沟通": 217,
+            "收获简历": 2,
+            "交换电话微信": 10,
+            "接受面试": 0
+        }
         """
 
         response = client.chat.completions.create(
@@ -313,7 +325,10 @@ def mock_employee_ocr(image: Image.Image) -> dict:
         parsed_data = json.loads(content)
 
         mapping = {
+            "我看过": "i_looked",
             "看过我": "seen_me",
+            "我打招呼": "i_greeted",
+            "牛人新招呼": "candidate_greeted",
             "我沟通": "i_communicated",
             "收获简历": "received_resumes",
             "交换电话微信": "exchanged_contact",
@@ -388,19 +403,14 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
         data_list = json.loads(content)
         df_raw = pd.DataFrame(data_list)
 
-        # ---------------------------------------------------------
-        # 防错对齐核心逻辑：以完整员工列表 (members) 为标准基准表进行 merge
-        # ---------------------------------------------------------
         base_df = pd.DataFrame({"员工姓名": members})
 
         if "员工姓名" in df_raw.columns:
-            # 确保姓名格式一致，去空格
             df_raw["员工姓名"] = df_raw["员工姓名"].astype(str).str.strip()
             df = pd.merge(base_df, df_raw, on="员工姓名", how="left")
         else:
             df = base_df.copy()
 
-        # 填充缺省列与缺失值
         required_cols = [
             "邀约数",
             "到面数",
@@ -416,7 +426,6 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
                 pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
             )
 
-        # 重新计算合计参培数
         df["参培数"] = (
             df["参培数(内单全职)"]
             + df["参培数(内单兼职)"]
@@ -470,9 +479,9 @@ def run_alert_engine(df_summary, is_monthly=False):
         name = row["员工姓名"]
         if name == "合计":
             continue
-        comm = row.get("主动沟通", 0)
+        comm = row.get("我沟通", 0)
         resumes = row.get("收获简历", 0)
-        wx = row.get("交换微信", 0)
+        wx = row.get("交换电话微信", 0)
         invites = row.get("邀约数", 0)
         interviews = row.get("到面数", 0)
         trainees = row.get("参培数", 0)
@@ -492,8 +501,8 @@ def run_alert_engine(df_summary, is_monthly=False):
             alerts.append({
                 "name": name,
                 "level": "🚨 触达预警：开场白与画像匹配度待优化",
-                "issue": f"{time_tag}主动沟通 {comm} 人，但私域仅获取 {wx} 个微信",
-                "data": f"沟通 {comm} 人 ➔ 微信仅 {wx} 人",
+                "issue": f"{time_tag}主动沟通 {comm} 人，但私域仅获取 {wx} 个联系方式",
+                "data": f"沟通 {comm} 人 ➔ 电话/微信仅 {wx} 人",
                 "reason": "打招呼量较大但私域留存偏低，可能存在推送职位与求职者意向不匹配",
                 "action": "建议抽查交流话术，优化精准画像筛选，提升有效沟通率",
             })
@@ -503,8 +512,8 @@ def run_alert_engine(df_summary, is_monthly=False):
             alerts.append({
                 "name": name,
                 "level": "⚠️ 跟进预警：私域候选人转化滞后",
-                "issue": f"{time_tag}获取微信 {wx} 个，但实际邀约仅 {invites} 人",
-                "data": f"微信 {wx} 人 ➔ 邀约 {invites} 人",
+                "issue": f"{time_tag}获取电话微信 {wx} 个，但实际邀约仅 {invites} 人",
+                "data": f"电话微信 {wx} 人 ➔ 邀约 {invites} 人",
                 "reason": "私域留存资源较丰富但尚未形成有效约面，可能存在跟进及时性不足",
                 "action": "建议梳理私域待跟进列表，通过电话复核提高直接邀约率",
             })
@@ -622,13 +631,13 @@ if page == "📱 员工端：手机填报与截图上传":
                 c = conn.cursor()
                 c.execute(
                     """INSERT OR REPLACE INTO platform_data 
-                       (date, employee_name, platform_version, seen_me, i_communicated, received_resumes, exchanged_contact, exchanged_phone, proposed_interview, accepted_interview, created_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                       (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, i_communicated, received_resumes, exchanged_contact, accepted_interview, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
                     (
                         date_str, emp_name, platform_ver,
-                        ocr["seen_me"], ocr["i_communicated"], ocr["received_resumes"],
-                        ocr["exchanged_contact"], ocr["exchanged_phone"],
-                        ocr["proposed_interview"], ocr["accepted_interview"],
+                        ocr["i_looked"], ocr["seen_me"], ocr["i_greeted"], ocr["candidate_greeted"],
+                        ocr["i_communicated"], ocr["received_resumes"],
+                        ocr["exchanged_contact"], ocr["accepted_interview"],
                     ),
                 )
                 conn.commit()
@@ -641,8 +650,9 @@ if page == "📱 员工端：手机填报与截图上传":
     with sqlite3.connect(DB_PATH) as conn:
         emp_records_df = pd.read_sql_query(
             """SELECT id as 记录编号, date as 数据日期, platform_version as 平台账号, 
-                      seen_me as 看过我, i_communicated as 主动沟通, received_resumes as 收到简历, 
-                      exchanged_contact as 交换微信, created_at as 提交时间 
+                      i_looked as 我看过, seen_me as 看过我, i_greeted as 我打招呼, candidate_greeted as 牛人新招呼,
+                      i_communicated as 我沟通, received_resumes as 收获简历, 
+                      exchanged_contact as 交换电话微信, accepted_interview as 接受面试, created_at as 提交时间 
                FROM platform_data WHERE employee_name = ? ORDER BY id DESC""",
             conn, params=[emp_name]
         )
@@ -672,7 +682,7 @@ if page == "📱 员工端：手机填报与截图上传":
         st.info("ℹ️ 暂无历史上传记录。")
 
 # ---------------------------------------------------------
-# 模块二：数据看板（包含序号重置为1开始）
+# 模块二：数据看板
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown("<div class='main-header'>📊 招聘全链路过程数据监控看板</div>", unsafe_allow_html=True)
@@ -702,10 +712,10 @@ elif page == "📊 业务预警与数据看板":
     with sqlite3.connect(DB_PATH) as conn:
         if "单月" in view_mode:
             df_p = pd.read_sql_query(
-                """SELECT employee_name as 员工姓名, SUM(seen_me) as 看过我,
-                          SUM(i_communicated) as 主动沟通, SUM(received_resumes) as 收获简历,
-                          SUM(exchanged_contact) as 交换微信, SUM(exchanged_phone) as 交换电话,
-                          SUM(proposed_interview) as 拟约面, SUM(accepted_interview) as 接受面试
+                """SELECT employee_name as 员工姓名, SUM(i_looked) as 我看过, SUM(seen_me) as 看过我,
+                          SUM(i_greeted) as 我打招呼, SUM(candidate_greeted) as 牛人新招呼,
+                          SUM(i_communicated) as 我沟通, SUM(received_resumes) as 收获简历,
+                          SUM(exchanged_contact) as 交换电话微信, SUM(accepted_interview) as 接受面试
                    FROM platform_data WHERE date LIKE ? GROUP BY employee_name""",
                 conn, params=[date_filter_p],
             )
@@ -720,10 +730,10 @@ elif page == "📊 业务预警与数据看板":
             )
         else:
             df_p = pd.read_sql_query(
-                """SELECT employee_name as 员工姓名, SUM(seen_me) as 看过我,
-                          SUM(i_communicated) as 主动沟通, SUM(received_resumes) as 收获简历,
-                          SUM(exchanged_contact) as 交换微信, SUM(exchanged_phone) as 交换电话,
-                          SUM(proposed_interview) as 拟约面, SUM(accepted_interview) as 接受面试
+                """SELECT employee_name as 员工姓名, SUM(i_looked) as 我看过, SUM(seen_me) as 看过我,
+                          SUM(i_greeted) as 我打招呼, SUM(candidate_greeted) as 牛人新招呼,
+                          SUM(i_communicated) as 我沟通, SUM(received_resumes) as 收获简历,
+                          SUM(exchanged_contact) as 交换电话微信, SUM(accepted_interview) as 接受面试
                    FROM platform_data WHERE date = ? GROUP BY employee_name""",
                 conn, params=[date_filter_p],
             )
@@ -746,7 +756,7 @@ elif page == "📊 业务预警与数据看板":
     )
 
     numeric_cols_to_sum = [
-        "看过我", "主动沟通", "收获简历", "交换微信", "交换电话", "拟约面",
+        "我看过", "看过我", "我打招呼", "牛人新招呼", "我沟通", "收获简历", "交换电话微信",
         "接受面试", "邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)",
         "参培数(外单全职)", "参培数(外单兼职)", "参培数"
     ]
@@ -763,8 +773,8 @@ elif page == "📊 业务预警与数据看板":
     df_display["到面转化率"] = df_display["到面转化率数值"].apply(lambda x: f"{x:.1f}%")
 
     final_cols = [
-        "员工姓名", "看过我", "主动沟通", "收获简历", "交换微信", "交换电话",
-        "拟约面", "接受面试", "邀约数", "到面数", "参培数(内单全职)",
+        "员工姓名", "我看过", "看过我", "我打招呼", "牛人新招呼", "我沟通", "收获简历", "交换电话微信",
+        "接受面试", "邀约数", "到面数", "参培数(内单全职)",
         "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)", "参培数", "到面转化率"
     ]
 
@@ -801,16 +811,16 @@ elif page == "📊 业务预警与数据看板":
         st.write("---")
         st.subheader("📊 招聘关键过程指标 (KPI) 团队排名")
         p1_col1, p1_col2, p1_col3, p1_col4 = st.columns(4)
-        with p1_col1: render_full_ranking(df_summary, "看过我", "看过我人数", "人")
-        with p1_col2: render_full_ranking(df_summary, "主动沟通", "主动沟通人数", "人")
-        with p1_col3: render_full_ranking(df_summary, "收获简历", "收获简历数量", "份")
-        with p1_col4: render_full_ranking(df_summary, "交换微信", "交换微信数量", "人")
+        with p1_col1: render_full_ranking(df_summary, "我看过", "我看过人数", "人")
+        with p1_col2: render_full_ranking(df_summary, "看过我", "看过我人数", "人")
+        with p1_col3: render_full_ranking(df_summary, "我打招呼", "我打招呼次数", "次")
+        with p1_col4: render_full_ranking(df_summary, "牛人新招呼", "牛人新招呼数", "个")
 
         p2_col1, p2_col2, p2_col3, p2_col4 = st.columns(4)
-        with p2_col1: render_full_ranking(df_summary, "邀约数", "邀约人数", "人")
-        with p2_col2: render_full_ranking(df_summary, "到面数", "到面人数", "人")
-        with p2_col3: render_full_ranking(df_summary, "参培数", "参培人数", "人")
-        with p2_col4: render_full_ranking(df_summary, "到面转化率数值", "到面转化率", "%")
+        with p2_col1: render_full_ranking(df_summary, "我沟通", "我沟通人数", "人")
+        with p2_col2: render_full_ranking(df_summary, "收获简历", "收获简历数量", "份")
+        with p2_col3: render_full_ranking(df_summary, "交换电话微信", "交换电话微信数", "人")
+        with p2_col4: render_full_ranking(df_summary, "接受面试", "接受面试人数", "人")
 
     st.write("---")
     st.subheader("🚨 智能过程漏斗卡点诊断与预警")
@@ -1021,8 +1031,9 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
         with sqlite3.connect(DB_PATH) as conn:
             df_records = pd.read_sql_query(
                 """SELECT id as 记录编号, date as 归属日期, employee_name as 员工姓名, platform_version as 平台账号,
-                          seen_me as 看过我, i_communicated as 主动沟通, received_resumes as 收到简历,
-                          exchanged_contact as 微信, exchanged_phone as 电话, created_at as 更新时间
+                          i_looked as 我看过, seen_me as 看过我, i_greeted as 我打招呼, candidate_greeted as 牛人新招呼,
+                          i_communicated as 我沟通, received_resumes as 收到简历,
+                          exchanged_contact as 交换电话微信, accepted_interview as 接受面试, created_at as 更新时间
                    FROM platform_data ORDER BY id DESC""",
                 conn,
             )
