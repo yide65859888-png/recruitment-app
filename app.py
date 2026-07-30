@@ -91,7 +91,6 @@ DEFAULT_MEMBERS = [
     "薛丽丽",
 ]
 
-# 扩充多账号平台选项
 PLATFORM_OPTIONS = [
     "易德Boss1号",
     "易德Boss2号",
@@ -105,12 +104,11 @@ PLATFORM_OPTIONS = [
 YESTERDAY = datetime.date.today() - datetime.timedelta(days=1)
 DB_PATH = "recruitment_data.db"
 
-# 通义千问视觉识别配置
 QWEN_CONFIG = {
     "api_key": "sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy",
     "base_url": "https://api.siliconflow.cn/v1",
     "model": "Qwen/Qwen3.6-35B-A3B",
-    "enable_thinking": False,  # 关闭 Qwen3 思考模式，加快响应
+    "enable_thinking": False,
 }
 
 TARGET_HEADERS = [
@@ -132,7 +130,6 @@ def init_db():
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
 
-        # 对 date, employee_name, platform_version 建立联合唯一约束，支持 REPLACE INTO 覆盖操作
         c.execute("""CREATE TABLE IF NOT EXISTS platform_data (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         date TEXT, 
@@ -247,9 +244,7 @@ if not st.session_state.logged_in:
                 st.success("登录成功！正在跳转...")
                 st.rerun()
             else:
-                st.error(
-                    "❌ 账号或密码错误！(默认员工密码为 123456，管理员账号 admin/admin123)"
-                )
+                st.error("❌ 账号或密码错误！(默认员工密码为 123456，管理员账号 admin/admin123)")
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
@@ -278,40 +273,13 @@ def mock_employee_ocr(image: Image.Image) -> dict:
         img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
         prompt = """
-        你是一个精准的数据提取与 OCR 视觉专家。图片中是招聘平台（如 Boss 直聘）的数据概览看板（可能来自于手机端或 PC 电脑端）。
+        你是一个精准的数据提取与 OCR 视觉专家。图片中是招聘平台（如 Boss 直聘）的数据概览看板。
 
         【必须提取的固定 8 个数据表头】：
-        1. 我看过
-        2. 看过我
-        3. 我打招呼
-        4. 牛人新招呼
-        5. 我沟通
-        6. 收获简历
-        7. 交换电话微信
-        8. 接受面试
+        1. 我看过  2. 看过我  3. 我打招呼  4. 牛人新招呼  5. 我沟通  6. 收获简历  7. 交换电话微信  8. 接受面试
 
-        【精准抓取与识别规则】：
-        1. **基于表头强文本匹配（忽略坐标与位置）**：
-           手机端和 PC 端的排列顺序可能不一致，请先定位卡片上的表头文字（如“我看过”），然后读取该表头下方或侧边对应的**最大字号主数值**。
-        2. **彻底剔除干扰数据**：
-           - 忽略数值单位字符（如“人”、“份”等）。
-           - 忽略所有趋势/增减变动数据（如“较昨日 -18 >”、“较昨日 +5 >”等右侧或下方的小字）。
-        3. **缺省容错**：
-           如果图片中没有找到某个表头，或者对应数据为空，请填 0。
-        4. **输出格式要求**：
-           必须且只能输出严格的纯 JSON 格式，不要包含任何 markdown 标签（如 ```json）、注释说明或思考过程。
-
-        【标准输出示例】：
-        {
-          "我看过": 168,
-          "看过我": 368,
-          "我打招呼": 150,
-          "牛人新招呼": 47,
-          "我沟通": 184,
-          "收获简历": 7,
-          "交换电话微信": 16,
-          "接受面试": 0
-        }
+        【输出格式要求】：
+        必须且只能输出严格的纯 JSON 格式，不要包含任何 markdown 标签或多余文字。
         """
 
         response = client.chat.completions.create(
@@ -323,9 +291,7 @@ def mock_employee_ocr(image: Image.Image) -> dict:
                         {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{img_b64}"
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
                         },
                     ],
                 }
@@ -381,28 +347,8 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
 
         prompt = f"""
         你是一个专业的数据提取助手。请仔细识别图片中表格包含的招聘数据。
-
-        【目标员工列表】：
-        {json.dumps(members, ensure_ascii=False)}
-
-        【提取规则】：
-        1. 请仔细读取图片中每一行员工对应的【邀约数】、【到面数】以及各个参培拆分项数值。
-        2. 识别提取目标员工列表中各成员的数据。
-        3. 如果图片中某项数值为空或未填写，默认设为 0。
-        4. 必须只输出严格的 JSON 数组结构，不要包含任何 markdown 标签、解释文字或思考过程。
-
-        【输出 JSON 字段结构】：
-        [
-          {{
-            "员工姓名": "张三",
-            "邀约数": 10,
-            "到面数": 5,
-            "参培数(内单全职)": 0,
-            "参培数(内单兼职)": 0,
-            "参培数(外单全职)": 1,
-            "参培数(外单兼职)": 0
-          }}
-        ]
+        【目标员工列表】：{json.dumps(members, ensure_ascii=False)}
+        必须只输出严格的 JSON 数组结构。
         """
 
         response = client.chat.completions.create(
@@ -414,9 +360,7 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
                         {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{img_b64}"
-                            },
+                            "image_url": {"url": f"data:image/png;base64,{img_b64}"},
                         },
                     ],
                 }
@@ -426,7 +370,6 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
         )
 
         content = response.choices[0].message.content.strip()
-
         if content.startswith("```"):
             lines = content.split("\n")
             if lines[0].startswith("```"):
@@ -439,71 +382,30 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
         df = pd.DataFrame(data_list)
 
         required_cols = [
-            "员工姓名",
-            "邀约数",
-            "到面数",
-            "参培数(内单全职)",
-            "参培数(内单兼职)",
-            "参培数(外单全职)",
-            "参培数(外单兼职)",
+            "员工姓名", "邀约数", "到面数", 
+            "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)"
         ]
         for col in required_cols:
             if col not in df.columns:
-                if col == "员工姓名":
-                    df["员工姓名"] = members
-                else:
-                    df[col] = 0
+                df[col] = members if col == "员工姓名" else 0
 
-        numeric_cols = [
-            "邀约数",
-            "到面数",
-            "参培数(内单全职)",
-            "参培数(内单兼职)",
-            "参培数(外单全职)",
-            "参培数(外单兼职)",
-        ]
+        numeric_cols = ["邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)"]
         for col in numeric_cols:
-            df[col] = (
-                pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
-            )
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
-        df["参培数"] = (
-            df["参培数(内单全职)"]
-            + df["参培数(内单兼职)"]
-            + df["参培数(外单全职)"]
-            + df["参培数(外单兼职)"]
-        )
-        return df[
-            [
-                "员工姓名",
-                "邀约数",
-                "到面数",
-                "参培数(内单全职)",
-                "参培数(内单兼职)",
-                "参培数(外单全职)",
-                "参培数(外单兼职)",
-                "参培数",
-            ]
-        ]
+        df["参培数"] = df["参培数(内单全职)"] + df["参培数(内单兼职)"] + df["参培数(外单全职)"] + df["参培数(外单兼职)"]
+        return df[["员工姓名", "邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)", "参培数"]]
 
     except Exception as e:
-        st.error(
-            f"⚠️ 大模型识别出现异常 ({e})，已切换至基础表结构，请手动补全修改。"
-        )
+        st.error(f"⚠️ 大模型识别出现异常 ({e})，已切换至基础表结构。")
         return pd.DataFrame({
-            "员工姓名": members,
-            "邀约数": 0,
-            "到面数": 0,
-            "参培数(内单全职)": 0,
-            "参培数(内单兼职)": 0,
-            "参培数(外单全职)": 0,
-            "参培数(外单兼职)": 0,
-            "参培数": 0,
+            "员工姓名": members, "邀约数": 0, "到面数": 0,
+            "参培数(内单全职)": 0, "参培数(内单兼职)": 0,
+            "参培数(外单全职)": 0, "参培数(外单兼职)": 0, "参培数": 0,
         })
 
 
 def check_existing_record(date_str, emp_name, platform):
-    """检测当前日期、员工、平台是否已有提交记录"""
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
         c.execute(
@@ -518,6 +420,8 @@ def run_alert_engine(df_summary, is_monthly=False):
     alerts = []
     for _, row in df_summary.iterrows():
         name = row["员工姓名"]
+        if name == "合计":
+            continue
         comm = row.get("主动沟通", 0)
         resumes = row.get("收获简历", 0)
         wx = row.get("交换微信", 0)
@@ -531,32 +435,19 @@ def run_alert_engine(df_summary, is_monthly=False):
                 "name": name,
                 "level": "🚨 产能预警：月度招聘产能严重不足",
                 "issue": f"{time_tag}累计邀约仅 {invites} 人，到面 {interviews} 人",
-                "data": (
-                    f"月邀约 {invites} 人 ➔ 到面 {interviews} 人 ➔ 参培"
-                    f" {trainees} 人"
-                ),
-                "reason": (
-                    "月度整体招聘动作极少，业务活动量严重不达标，未能建立起有效的招聘漏斗基数"
-                ),
-                "action": (
-                    "建议拉通一对一辅导，明确每日打招呼、私域跟进与约面的最低过程 KPI"
-                ),
+                "data": f"月邀约 {invites} 人 ➔ 到面 {interviews} 人 ➔ 参培 {trainees} 人",
+                "reason": "月度整体招聘动作极少，业务活动量严重不达标，未能建立起有效的招聘漏斗基数",
+                "action": "建议拉通一对一辅导，明确每日打招呼、私域跟进与约面的最低过程 KPI",
             })
 
         if comm > 100 and (resumes + wx) < 30:
             alerts.append({
                 "name": name,
                 "level": "🚨 触达预警：开场白与画像匹配度待优化",
-                "issue": (
-                    f"{time_tag}主动沟通 {comm} 人，但私域仅获取 {wx} 个微信"
-                ),
+                "issue": f"{time_tag}主动沟通 {comm} 人，但私域仅获取 {wx} 个微信",
                 "data": f"沟通 {comm} 人 ➔ 微信仅 {wx} 人",
-                "reason": (
-                    "打招呼量较大但私域留存偏低，可能存在推送职位与求职者意向不匹配或交流话术吸引力不足"
-                ),
-                "action": (
-                    "建议抽查交流话术，优化精准画像筛选，提升有效沟通率"
-                ),
+                "reason": "打招呼量较大但私域留存偏低，可能存在推送职位与求职者意向不匹配",
+                "action": "建议抽查交流话术，优化精准画像筛选，提升有效沟通率",
             })
 
         min_invites = 5 if is_monthly else 1
@@ -564,96 +455,49 @@ def run_alert_engine(df_summary, is_monthly=False):
             alerts.append({
                 "name": name,
                 "level": "⚠️ 跟进预警：私域候选人转化滞后",
-                "issue": (
-                    f"{time_tag}获取微信 {wx} 个，但实际邀约仅 {invites} 人"
-                ),
+                "issue": f"{time_tag}获取微信 {wx} 个，但实际邀约仅 {invites} 人",
                 "data": f"微信 {wx} 人 ➔ 邀约 {invites} 人",
-                "reason": (
-                    "私域留存资源较丰富但尚未形成有效约面，可能存在跟进及时性不足或约面促成临门一脚欠缺"
-                ),
-                "action": (
-                    "建议梳理私域待跟进列表，通过电话复核提高直接邀约率"
-                ),
+                "reason": "私域留存资源较丰富但尚未形成有效约面，可能存在跟进及时性不足",
+                "action": "建议梳理私域待跟进列表，通过电话复核提高直接邀约率",
             })
 
-        trainee_rate = (
-            (trainees / interviews * 100) if interviews > 0 else 0
-        )
-        if interviews >= (15 if is_monthly else 20) and (
-            trainees == 0 or trainee_rate < 10.0
-        ):
+        trainee_rate = (trainees / interviews * 100) if interviews > 0 else 0
+        if interviews >= (15 if is_monthly else 20) and (trainees == 0 or trainee_rate < 10.0):
             alerts.append({
                 "name": name,
                 "level": "🚨 转化预警：到面至参培漏斗断层",
-                "issue": (
-                    f"{time_tag}到面 {interviews} 人，但参培仅 {trainees} 人"
-                    f" (转化率仅 {trainee_rate:.1f}%)"
-                ),
+                "issue": f"{time_tag}到面 {interviews} 人，但参培仅 {trainees} 人 (转化率仅 {trainee_rate:.1f}%)",
                 "data": f"到面 {interviews} 人 ➔ 参培仅 {trainees} 人",
-                "reason": (
-                    "到场人数较多但后续参培流失率极高，可能存在前期求职意向确认不足、或现场宣讲/面试预期管理差距较大"
-                ),
-                "action": (
-                    "建议加强现场面试反馈复盘，提高前期邀约精准度与求职意向深度确认"
-                ),
+                "reason": "到场人数较多但后续参培流失率极高，可能存在前期求职意向确认不足",
+                "action": "建议加强现场面试反馈复盘，提高前期邀约精准度",
             })
 
         if invites > 0 and interviews >= (invites * 2):
             alerts.append({
                 "name": name,
                 "level": "🛠️ 规范预警：过程数据同步延迟",
-                "issue": (
-                    f"{time_tag}到面数({interviews}) 显著高于"
-                    f" 邀约记录数({invites})"
-                ),
-                "data": (
-                    f"到面转化率异常达到 {((interviews/invites)*100):.1f}%"
-                ),
-                "reason": (
-                    "可能存在事前邀约数据录入不及时、求职者到场后才集中补录的情况"
-                ),
-                "action": (
-                    "建议规范“事前录入邀约、事后核到面”的数据更新节奏，确保过程数据实时准确"
-                ),
+                "issue": f"{time_tag}到面数({interviews}) 显著高于 邀约记录数({invites})",
+                "data": f"到面转化率异常达到 {((interviews/invites)*100):.1f}%",
+                "reason": "可能存在事前邀约数据录入不及时、求职者到场后才集中补录的情况",
+                "action": "建议规范“事前录入邀约、事后核到面”的数据更新节奏",
             })
     return alerts
 
 
 def render_full_ranking(df, col_name, title_name, unit=""):
-    df_sorted = df.sort_values(by=col_name, ascending=False).reset_index(
-        drop=True
-    )
+    df_sorted = df.sort_values(by=col_name, ascending=False).reset_index(drop=True)
     html = f'<div class="rank-box"><div class="rank-title">🏆 {title_name}</div>'
     for i in range(len(df_sorted)):
         val = df_sorted.loc[i, col_name]
         name = df_sorted.loc[i, "员工姓名"]
         rank_class = (
-            "rank-item-top1"
-            if i == 0
-            else (
-                "rank-item-top2"
-                if i == 1
-                else "rank-item-top3" if i == 2 else "rank-item-normal"
-            )
+            "rank-item-top1" if i == 0 else ("rank-item-top2" if i == 1 else "rank-item-top3" if i == 2 else "rank-item-normal")
         )
         prefix = (
-            "🥇 第1名"
-            if i == 0
-            else (
-                "🥈 第2名"
-                if i == 1
-                else (
-                    "🥉 第3名"
-                    if i == 2
-                    else f"&nbsp;&nbsp;&nbsp;第{i+1}名"
-                )
-            )
+            "🥇 第1名" if i == 0 else ("🥈 第2名" if i == 1 else ("🥉 第3名" if i == 2 else f"&nbsp;&nbsp;&nbsp;第{i+1}名"))
         )
         val_str = f"{val:.1f}{unit}" if unit == "%" else f"{int(val)}{unit}"
-        html += (
-            f'<div class="{rank_class}">{prefix}: <b>{name}</b>'
-            f' ({val_str})</div>'
-        )
+        html += f'<div class="{rank_class}">{prefix}: <b>{name}</b> ({val_str})</div>'
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
@@ -666,16 +510,13 @@ is_admin = st.session_state.role == "admin"
 
 st.sidebar.title("📌 招聘监控系统")
 st.sidebar.markdown(
-    f"<div class='user-badge'>👤 当前登录：{st.session_state.real_name}"
-    f" ({'管理员' if is_admin else '员工'})</div>",
+    f"<div class='user-badge'>👤 当前登录：{st.session_state.real_name} ({'管理员' if is_admin else '员工'})</div>",
     unsafe_allow_html=True,
 )
 
 menu_options = ["📱 员工端：手机填报与截图上传", "📊 业务预警与数据看板"]
 if is_admin:
-    menu_options.extend(
-        ["📋 数据端：智能识图/录入业绩", "⚙️ 管理端：账号管理与记录维护"]
-    )
+    menu_options.extend(["📋 数据端：智能识图/录入业绩", "⚙️ 管理端：账号管理与记录维护"])
 
 page = st.sidebar.radio("选择模块：", menu_options)
 
@@ -687,13 +528,10 @@ if st.sidebar.button("🚪 退出登录"):
     st.rerun()
 
 # ---------------------------------------------------------
-# 模块一：员工端
+# 模块一：员工端（包含历史记录与删除管理）
 # ---------------------------------------------------------
 if page == "📱 员工端：手机填报与截图上传":
-    st.markdown(
-        "<div class='main-header'>📱 员工每日平台数据快捷填报</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<div class='main-header'>📱 员工每日平台数据快捷填报</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("1️⃣ 基本信息确认")
@@ -702,13 +540,9 @@ if page == "📱 员工端：手机填报与截图上传":
         emp_name = st.session_state.real_name
         st.info(f"👤 填报员工：**{emp_name}**（自动绑定当前登录账号）")
     else:
-        emp_name = st.selectbox(
-            "👤 选择填报员工（管理员代传模式）", all_team_members, index=0
-        )
+        emp_name = st.selectbox("👤 选择填报员工（管理员代传模式）", all_team_members, index=0)
 
-    record_date = st.date_input(
-        "数据日期（默认昨天）", YESTERDAY, key="upload_date_picker"
-    )
+    record_date = st.date_input("数据日期（默认昨天）", YESTERDAY, key="upload_date_picker")
     date_str = record_date.strftime("%Y-%m-%d")
 
     platform_ver = st.selectbox("选择账号版本/平台", PLATFORM_OPTIONS)
@@ -716,17 +550,14 @@ if page == "📱 员工端：手机填报与截图上传":
     existing_time = check_existing_record(date_str, emp_name, platform_ver)
     if existing_time:
         st.info(
-            f"💡 提示：检测到您在 **{date_str}** 已提交过 **[{platform_ver}]** 的数据（提交时间："
-            f" {existing_time}）。**再次提交将自动覆盖替换上一张数据**。"
+            f"💡 提示：检测到您在 **{date_str}** 已提交过 **[{platform_ver}]** 的数据（提交时间：{existing_time}）。**再次提交将自动覆盖替换上一张数据**。"
         )
 
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("2️⃣ 上传平台截图")
-    uploaded_file = st.file_uploader(
-        "点击上传或手机拍照", type=["jpg", "png", "jpeg"]
-    )
+    uploaded_file = st.file_uploader("点击上传或手机拍照", type=["jpg", "png", "jpeg"])
     st.markdown("</div>", unsafe_allow_html=True)
 
     submit_btn = st.button("🚀 立即提交保存", type="primary")
@@ -736,60 +567,77 @@ if page == "📱 员工端：手机填报与截图上传":
             st.warning("⚠️ 请先选择并上传一张平台截图！")
         else:
             image = Image.open(uploaded_file)
-            with st.spinner(
-                "🤖 正在调用通义千问大模型精准抓取截图数据，请稍候..."
-            ):
+            with st.spinner("🤖 正在调用通义千问大模型精准抓取截图数据，请稍候..."):
                 ocr = mock_employee_ocr(image)
 
             with sqlite3.connect(DB_PATH) as conn:
                 c = conn.cursor()
-                # 借助 REPLACE INTO：如果 (date, employee_name, platform_version) 冲突，自动覆盖上一条记录
                 c.execute(
                     """INSERT OR REPLACE INTO platform_data 
                        (date, employee_name, platform_version, seen_me, i_communicated, received_resumes, exchanged_contact, exchanged_phone, proposed_interview, accepted_interview, created_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
                     (
-                        date_str,
-                        emp_name,
-                        platform_ver,
-                        ocr["seen_me"],
-                        ocr["i_communicated"],
-                        ocr["received_resumes"],
-                        ocr["exchanged_contact"],
-                        ocr["exchanged_phone"],
-                        ocr["proposed_interview"],
-                        ocr["accepted_interview"],
+                        date_str, emp_name, platform_ver,
+                        ocr["seen_me"], ocr["i_communicated"], ocr["received_resumes"],
+                        ocr["exchanged_contact"], ocr["exchanged_phone"],
+                        ocr["proposed_interview"], ocr["accepted_interview"],
                     ),
                 )
                 conn.commit()
             st.balloons()
-            st.success(
-                f"🎉 提交成功！[{emp_name}] 在 [{date_str}] 的 [{platform_ver}]"
-                " 数据已更新覆盖！"
+            st.success(f"🎉 提交成功！[{emp_name}] 在 [{date_str}] 的 [{platform_ver}] 数据已更新覆盖！")
+            st.rerun()
+
+    # --- 优化需求2：展示历史上传数据信息与删除操作 ---
+    st.write("---")
+    st.subheader("📜 个人历史数据上传记录与维护")
+    with sqlite3.connect(DB_PATH) as conn:
+        emp_records_df = pd.read_sql_query(
+            """SELECT id as 记录编号, date as 数据日期, platform_version as 平台账号, 
+                      seen_me as 看过我, i_communicated as 主动沟通, received_resumes as 收到简历, 
+                      exchanged_contact as 交换微信, created_at as 提交时间 
+               FROM platform_data WHERE employee_name = ? ORDER BY id DESC""",
+            conn, params=[emp_name]
+        )
+
+    if not emp_records_df.empty:
+        # 序号设为从 1 开始
+        emp_records_df.index = range(1, len(emp_records_df) + 1)
+        st.dataframe(emp_records_df, use_container_width=True)
+
+        col_del1, col_del2 = st.columns([3, 1])
+        with col_del1:
+            record_to_del = st.selectbox(
+                "选择要删除的错误提交记录：",
+                options=emp_records_df["记录编号"].tolist(),
+                format_func=lambda x: f"记录编号 #{x} | 日期: {emp_records_df[emp_records_df['记录编号']==x]['数据日期'].values[0]} | 平台: {emp_records_df[emp_records_df['记录编号']==x]['平台账号'].values[0]}"
             )
+        with col_del2:
+            st.write("")
+            st.write("")
+            if st.button("🗑️ 删除选中的记录", type="primary"):
+                with sqlite3.connect(DB_PATH) as conn:
+                    c = conn.cursor()
+                    c.execute("DELETE FROM platform_data WHERE id = ?", (record_to_del,))
+                    conn.commit()
+                st.success(f"✅ 记录 #{record_to_del} 已成功删除！")
+                st.rerun()
+    else:
+        st.info("ℹ️ 暂无历史上传记录。")
 
 # ---------------------------------------------------------
-# 模块二：数据看板（支持多账号数据聚合）
+# 模块二：数据看板（包含序号重置为1开始）
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
-    st.markdown(
-        "<div class='main-header'>📊 招聘全链路过程数据监控看板</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<div class='main-header'>📊 招聘全链路过程数据监控看板</div>", unsafe_allow_html=True)
 
     col_view, col_date, col_filter = st.columns([1, 1.2, 1.8])
-    view_mode = col_view.radio(
-        "数据维度", ["📅 当日全链路", "📆 单月累计业绩"], horizontal=True
-    )
+    view_mode = col_view.radio("数据维度", ["📅 当日全链路", "📆 单月累计业绩"], horizontal=True)
 
     if "单月" in view_mode:
         col_y, col_m = col_date.columns(2)
         selected_year = col_y.selectbox("年份", [2026, 2025], index=0)
-        selected_m_str = col_m.selectbox(
-            "月份",
-            [f"{m:02d}月" for m in range(1, 13)],
-            index=YESTERDAY.month - 1,
-        )
+        selected_m_str = col_m.selectbox("月份", [f"{m:02d}月" for m in range(1, 13)], index=YESTERDAY.month - 1)
         month_str = f"{selected_year}-{selected_m_str.replace('月', '')}"
         date_filter_p = f"{month_str}%"
         date_filter_perf = f"{month_str}%"
@@ -801,93 +649,60 @@ elif page == "📊 业务预警与数据看板":
 
     if not is_admin:
         selected_employees = [st.session_state.real_name]
-        col_filter.info(
-            f"🔒 数据范围：已锁定当前登录员工 **[{st.session_state.real_name}]**"
-        )
+        col_filter.info(f"🔒 数据范围：已锁定当前登录员工 **[{st.session_state.real_name}]**")
     else:
-        selected_employees = col_filter.multiselect(
-            "筛选员工姓名", all_team_members, default=all_team_members
-        )
+        selected_employees = col_filter.multiselect("筛选员工姓名", all_team_members, default=all_team_members)
 
     with sqlite3.connect(DB_PATH) as conn:
         if "单月" in view_mode:
-            # GROUP BY employee_name 实现同一个员工多个账号平台的数据求和汇总
             df_p = pd.read_sql_query(
-                "SELECT employee_name as 员工姓名, SUM(seen_me) as 看过我,"
-                " SUM(i_communicated) as 主动沟通, SUM(received_resumes) as"
-                " 收获简历, SUM(exchanged_contact) as 交换微信,"
-                " SUM(exchanged_phone) as 交换电话, SUM(proposed_interview) as"
-                " 拟约面, SUM(accepted_interview) as 接受面试 FROM platform_data"
-                " WHERE date LIKE ? GROUP BY employee_name",
-                conn,
-                params=[date_filter_p],
+                """SELECT employee_name as 员工姓名, SUM(seen_me) as 看过我,
+                          SUM(i_communicated) as 主动沟通, SUM(received_resumes) as 收获简历,
+                          SUM(exchanged_contact) as 交换微信, SUM(exchanged_phone) as 交换电话,
+                          SUM(proposed_interview) as 拟约面, SUM(accepted_interview) as 接受面试
+                   FROM platform_data WHERE date LIKE ? GROUP BY employee_name""",
+                conn, params=[date_filter_p],
             )
             df_perf = pd.read_sql_query(
                 """SELECT employee_name as 员工姓名, 
-                          MAX(month_invites) as 邀约数,
-                          MAX(month_interviews) as 到面数,
-                          MAX(month_inner_ft) as "参培数(内单全职)",
-                          MAX(month_inner_pt) as "参培数(内单兼职)",
-                          MAX(month_outer_ft) as "参培数(外单全职)",
-                          MAX(month_outer_pt) as "参培数(外单兼职)",
+                          MAX(month_invites) as 邀约数, MAX(month_interviews) as 到面数,
+                          MAX(month_inner_ft) as "参培数(内单全职)", MAX(month_inner_pt) as "参培数(内单兼职)",
+                          MAX(month_outer_ft) as "参培数(外单全职)", MAX(month_outer_pt) as "参培数(外单兼职)",
                           MAX(month_trainees) as 参培数
                    FROM performance_data WHERE date LIKE ? GROUP BY employee_name""",
-                conn,
-                params=[date_filter_perf],
+                conn, params=[date_filter_perf],
             )
         else:
             df_p = pd.read_sql_query(
-                "SELECT employee_name as 员工姓名, SUM(seen_me) as 看过我,"
-                " SUM(i_communicated) as 主动沟通, SUM(received_resumes) as"
-                " 收获简历, SUM(exchanged_contact) as 交换微信,"
-                " SUM(exchanged_phone) as 交换电话, SUM(proposed_interview) as"
-                " 拟约面, SUM(accepted_interview) as 接受面试 FROM platform_data"
-                " WHERE date = ? GROUP BY employee_name",
-                conn,
-                params=[date_filter_p],
+                """SELECT employee_name as 员工姓名, SUM(seen_me) as 看过我,
+                          SUM(i_communicated) as 主动沟通, SUM(received_resumes) as 收获简历,
+                          SUM(exchanged_contact) as 交换微信, SUM(exchanged_phone) as 交换电话,
+                          SUM(proposed_interview) as 拟约面, SUM(accepted_interview) as 接受面试
+                   FROM platform_data WHERE date = ? GROUP BY employee_name""",
+                conn, params=[date_filter_p],
             )
             df_perf = pd.read_sql_query(
                 """SELECT employee_name as 员工姓名, 
-                          SUM(invites) as 邀约数,
-                          SUM(interviews) as 到面数,
-                          SUM(inner_ft) as "参培数(内单全职)",
-                          SUM(inner_pt) as "参培数(内单兼职)",
-                          SUM(outer_ft) as "参培数(外单全职)",
-                          SUM(outer_pt) as "参培数(外单兼职)",
+                          SUM(invites) as 邀约数, SUM(interviews) as 到面数,
+                          SUM(inner_ft) as "参培数(内单全职)", SUM(inner_pt) as "参培数(内单兼职)",
+                          SUM(outer_ft) as "参培数(外单全职)", SUM(outer_pt) as "参培数(外单兼职)",
                           SUM(trainees) as 参培数
                    FROM performance_data WHERE date = ? GROUP BY employee_name""",
-                conn,
-                params=[date_filter_perf],
+                conn, params=[date_filter_perf],
             )
 
     df_base = pd.DataFrame({"员工姓名": selected_employees})
     df_summary = pd.merge(df_base, df_p, on="员工姓名", how="left")
-    df_summary = pd.merge(df_summary, df_perf, on="员工姓名", how="left").fillna(
-        0
-    )
+    df_summary = pd.merge(df_summary, df_perf, on="员工姓名", how="left").fillna(0)
 
     df_summary["到面转化率数值"] = df_summary.apply(
-        lambda r: (
-            (r["到面数"] / r["邀约数"] * 100) if r.get("邀约数", 0) > 0 else 0.0
-        ),
-        axis=1,
+        lambda r: ((r["到面数"] / r["邀约数"] * 100) if r.get("邀约数", 0) > 0 else 0.0), axis=1
     )
 
     numeric_cols_to_sum = [
-        "看过我",
-        "主动沟通",
-        "收获简历",
-        "交换微信",
-        "交换电话",
-        "拟约面",
-        "接受面试",
-        "邀约数",
-        "到面数",
-        "参培数(内单全职)",
-        "参培数(内单兼职)",
-        "参培数(外单全职)",
-        "参培数(外单兼职)",
-        "参培数",
+        "看过我", "主动沟通", "收获简历", "交换微信", "交换电话", "拟约面",
+        "接受面试", "邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)",
+        "参培数(外单全职)", "参培数(外单兼职)", "参培数"
     ]
 
     total_row = {"员工姓名": "合计"}
@@ -896,41 +711,23 @@ elif page == "📊 业务预警与数据看板":
 
     total_invites = total_row["邀约数"]
     total_interviews = total_row["到面数"]
-    total_conv_rate = (
-        (total_interviews / total_invites * 100) if total_invites > 0 else 0.0
-    )
-    total_row["到面转化率数值"] = total_conv_rate
+    total_row["到面转化率数值"] = ((total_interviews / total_invites * 100) if total_invites > 0 else 0.0)
 
-    df_display = pd.concat(
-        [df_summary, pd.DataFrame([total_row])], ignore_index=True
-    )
-    df_display["到面转化率"] = df_display["到面转化率数值"].apply(
-        lambda x: f"{x:.1f}%"
-    )
+    df_display = pd.concat([df_summary, pd.DataFrame([total_row])], ignore_index=True)
+    df_display["到面转化率"] = df_display["到面转化率数值"].apply(lambda x: f"{x:.1f}%")
 
     final_cols = [
-        "员工姓名",
-        "看过我",
-        "主动沟通",
-        "收获简历",
-        "交换微信",
-        "交换电话",
-        "拟约面",
-        "接受面试",
-        "邀约数",
-        "到面数",
-        "参培数(内单全职)",
-        "参培数(内单兼职)",
-        "参培数(外单全职)",
-        "参培数(外单兼职)",
-        "参培数",
-        "到面转化率",
+        "员工姓名", "看过我", "主动沟通", "收获简历", "交换微信", "交换电话",
+        "拟约面", "接受面试", "邀约数", "到面数", "参培数(内单全职)",
+        "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)", "参培数", "到面转化率"
     ]
 
-    st.subheader(
-        f"📋 招聘全链路汇总表 ({month_str if '单月' in view_mode else date_str})"
-    )
-    st.dataframe(df_display[final_cols], height=250 if not is_admin else 400)
+    st.subheader(f"📋 招聘全链路汇总表 ({month_str if '单月' in view_mode else date_str})")
+
+    # --- 优化需求3：显示表格索引序列号从 1 开始 ---
+    df_board_show = df_display[final_cols].copy()
+    df_board_show.index = range(1, len(df_board_show) + 1)
+    st.dataframe(df_board_show, height=250 if not is_admin else 400, use_container_width=True)
 
     st.markdown("##### 📥 导出数据")
     col_exp1, col_exp2 = st.columns([1, 1])
@@ -938,30 +735,20 @@ elif page == "📊 业务预警与数据看板":
     with col_exp1:
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            df_display[final_cols].to_excel(
-                writer, index=False, sheet_name="招聘数据"
-            )
+            df_display[final_cols].to_excel(writer, index=False, sheet_name="招聘数据")
         st.download_button(
             label="📊 导出 Excel 表格 (.xlsx)",
             data=excel_buffer.getvalue(),
-            file_name=(
-                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in view_mode else date_str}.xlsx"
-            ),
-            mime=(
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            ),
+            file_name=f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in view_mode else date_str}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
     with col_exp2:
-        csv_bytes = (
-            df_display[final_cols].to_csv(index=False).encode("utf-8-sig")
-        )
+        csv_bytes = df_display[final_cols].to_csv(index=False).encode("utf-8-sig")
         st.download_button(
             label="📄 导出 CSV 文件 (.csv)",
             data=csv_bytes,
-            file_name=(
-                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in view_mode else date_str}.csv"
-            ),
+            file_name=f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in view_mode else date_str}.csv",
             mime="text/csv",
         )
 
@@ -969,178 +756,135 @@ elif page == "📊 业务预警与数据看板":
         st.write("---")
         st.subheader("📊 招聘关键过程指标 (KPI) 团队排名")
         p1_col1, p1_col2, p1_col3, p1_col4 = st.columns(4)
-        with p1_col1:
-            render_full_ranking(df_summary, "看过我", "看过我人数", "人")
-        with p1_col2:
-            render_full_ranking(
-                df_summary, "主动沟通", "主动沟通人数", "人"
-            )
-        with p1_col3:
-            render_full_ranking(
-                df_summary, "收获简历", "收获简历数量", "份"
-            )
-        with p1_col4:
-            render_full_ranking(
-                df_summary, "交换微信", "交换微信数量", "人"
-            )
+        with p1_col1: render_full_ranking(df_summary, "看过我", "看过我人数", "人")
+        with p1_col2: render_full_ranking(df_summary, "主动沟通", "主动沟通人数", "人")
+        with p1_col3: render_full_ranking(df_summary, "收获简历", "收获简历数量", "份")
+        with p1_col4: render_full_ranking(df_summary, "交换微信", "交换微信数量", "人")
 
         p2_col1, p2_col2, p2_col3, p2_col4 = st.columns(4)
-        with p2_col1:
-            render_full_ranking(df_summary, "邀约数", "邀约人数", "人")
-        with p2_col2:
-            render_full_ranking(df_summary, "到面数", "到面人数", "人")
-        with p2_col3:
-            render_full_ranking(df_summary, "参培数", "参培人数", "人")
-        with p2_col4:
-            render_full_ranking(
-                df_summary, "到面转化率数值", "到面转化率", "%"
-            )
+        with p2_col1: render_full_ranking(df_summary, "邀约数", "邀约人数", "人")
+        with p2_col2: render_full_ranking(df_summary, "到面数", "到面人数", "人")
+        with p2_col3: render_full_ranking(df_summary, "参培数", "参培人数", "人")
+        with p2_col4: render_full_ranking(df_summary, "到面转化率数值", "到面转化率", "%")
 
     st.write("---")
     st.subheader("🚨 智能过程漏斗卡点诊断与预警")
     alerts = run_alert_engine(df_summary, is_monthly=("单月" in view_mode))
     if alerts:
         for a in alerts:
-            card_class = (
-                "alert-card-danger"
-                if "🚨" in a["level"]
-                else "alert-card-warning"
-            )
+            card_class = "alert-card-danger" if "🚨" in a["level"] else "alert-card-warning"
             st.markdown(
-                f"<div class='{card_class}'><b>【{a['level']}】{a['name']} -"
-                f" {a['issue']}</b><br/>• <b>卡点数据：</b>"
-                f" {a['data']}<br/>• <b>归因诊断：</b>"
-                f" {a['reason']}<br/>• <b>建议动作：</b> {a['action']}</div>",
+                f"<div class='{card_class}'><b>【{a['level']}】{a['name']} - {a['issue']}</b><br/>• <b>卡点数据：</b> {a['data']}<br/>• <b>归因诊断：</b> {a['reason']}<br/>• <b>建议动作：</b> {a['action']}</div>",
                 unsafe_allow_html=True,
             )
     else:
         st.success("🎉 数据表现正常，暂无过程卡点预警！")
 
 # ---------------------------------------------------------
-# 模块三：识图录入端
+# 模块三：数据端（含智能识图覆盖写入与历史修改/删除）
 # ---------------------------------------------------------
 elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
-    st.markdown(
-        "<div class='main-header'>📋"
-        " 数据端：部门业绩汇总与智能识图录入 (管理员专用)</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<div class='main-header'>📋 数据端：部门业绩汇总与智能识图录入 (管理员专用)</div>", unsafe_allow_html=True)
     col_type, col_date = st.columns(2)
-    data_type = col_type.radio(
-        "📌 选择上传的数据表类型：",
-        ["📅 日度业绩表", "📆 单月累计业绩表"],
-        horizontal=True,
-    )
+    data_type = col_type.radio("📌 选择上传的数据表类型：", ["📅 日度业绩表", "📆 单月累计业绩表"], horizontal=True)
     p_date_img = col_date.date_input("选择业绩数据日期", YESTERDAY)
+    date_str = p_date_img.strftime("%Y-%m-%d")
 
     st.write("---")
-    if "日度" in data_type:
-        daily_img = st.file_uploader(
-            "上传【日度】表格截图", type=["jpg", "png", "jpeg"]
+    img_type_label = "【日度】" if "日度" in data_type else "【单月累计】"
+    uploaded_perf_img = st.file_uploader(f"上传{img_type_label}表格截图", type=["jpg", "png", "jpeg"])
+
+    if uploaded_perf_img is not None:
+        image = Image.open(uploaded_perf_img)
+        st.image(image, caption="已上传截图", width=400)
+
+        with st.spinner("🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."):
+            df_extracted = llm_supervisor_ocr(image, all_team_members)
+
+        st.info("💡 请在下方核对识图抓取结果（数据重复上传将自动按日期和员工覆盖历史记录）：")
+        edited_df = st.data_editor(df_extracted, num_rows="dynamic")
+        edited_df["参培数"] = (
+            edited_df["参培数(内单全职)"] + edited_df["参培数(内单兼职)"] +
+            edited_df["参培数(外单全职)"] + edited_df["参培数(外单兼职)"]
         )
-        if daily_img is not None:
-            image = Image.open(daily_img)
-            st.image(image, caption="已上传截图", width=400)
 
-            with st.spinner(
-                "🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."
-            ):
-                df_extracted = llm_supervisor_ocr(image, all_team_members)
+        if st.button(f"💾 确认提交{img_type_label}数据入库"):
+            with sqlite3.connect(DB_PATH) as conn:
+                c = conn.cursor()
+                for idx, row in edited_df.iterrows():
+                    emp = row["员工姓名"]
+                    c.execute("SELECT id FROM performance_data WHERE date = ? AND employee_name = ?", (date_str, emp))
+                    exist = c.fetchone()
 
-            st.info(
-                "💡 请在下方核对识图抓取结果，参培数会自动根据 4 个拆分项计算合计："
+                    if "日度" in data_type:
+                        if exist:
+                            c.execute(
+                                """UPDATE performance_data SET invites=?, interviews=?, inner_ft=?, inner_pt=?, outer_ft=?, outer_pt=?, trainees=? WHERE id=?""",
+                                (int(row["邀约数"]), int(row["到面数"]), int(row["参培数(内单全职)"]), int(row["参培数(内单兼职)"]), int(row["参培数(外单全职)"]), int(row["参培数(外单兼职)"]), int(row["参培数"]), exist[0])
+                            )
+                        else:
+                            c.execute(
+                                """INSERT INTO performance_data (date, employee_name, invites, interviews, inner_ft, inner_pt, outer_ft, outer_pt, trainees) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (date_str, emp, int(row["邀约数"]), int(row["到面数"]), int(row["参培数(内单全职)"]), int(row["参培数(内单兼职)"]), int(row["参培数(外单全职)"]), int(row["参培数(外单兼职)"]), int(row["参培数"]))
+                            )
+                    else:
+                        if exist:
+                            c.execute(
+                                """UPDATE performance_data SET month_invites=?, month_interviews=?, month_inner_ft=?, month_inner_pt=?, month_outer_ft=?, month_outer_pt=?, month_trainees=? WHERE id=?""",
+                                (int(row["邀约数"]), int(row["到面数"]), int(row["参培数(内单全职)"]), int(row["参培数(内单兼职)"]), int(row["参培数(外单全职)"]), int(row["参培数(外单兼职)"]), int(row["参培数"]), exist[0])
+                            )
+                        else:
+                            c.execute(
+                                """INSERT INTO performance_data (date, employee_name, month_invites, month_interviews, month_inner_ft, month_inner_pt, month_outer_ft, month_outer_pt, month_trainees) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (date_str, emp, int(row["邀约数"]), int(row["到面数"]), int(row["参培数(内单全职)"]), int(row["参培数(内单兼职)"]), int(row["参培数(外单全职)"]), int(row["参培数(外单兼职)"]), int(row["参培数"]))
+                            )
+                conn.commit()
+            st.balloons()
+            st.success(f"🎉 成功更新覆盖 {date_str} 的{img_type_label}业绩数据！")
+            st.rerun()
+
+    # --- 优化需求1：新增数据查询与单条/同批删除功能 ---
+    st.write("---")
+    st.subheader("🔍 历史业绩数据查询与单条删除维护")
+    with sqlite3.connect(DB_PATH) as conn:
+        perf_records_df = pd.read_sql_query(
+            """SELECT id as 记录编号, date as 数据日期, employee_name as 员工姓名, 
+                      invites as 日邀约, interviews as 日到面, trainees as 日参培,
+                      month_invites as 月邀约, month_interviews as 月到面, month_trainees as 月参培
+               FROM performance_data ORDER BY id DESC""",
+            conn
+        )
+
+    if not perf_records_df.empty:
+        # 序号统一改为从 1 开始
+        perf_records_df.index = range(1, len(perf_records_df) + 1)
+        st.dataframe(perf_records_df, use_container_width=True)
+
+        col_del_p1, col_del_p2 = st.columns([3, 1])
+        with col_del_p1:
+            perf_id_to_del = st.selectbox(
+                "选择需要删除的历史业绩记录 ID：",
+                options=perf_records_df["记录编号"].tolist(),
+                format_func=lambda x: f"记录编号 #{x} | 日期: {perf_records_df[perf_records_df['记录编号']==x]['数据日期'].values[0]} | 员工: {perf_records_df[perf_records_df['记录编号']==x]['员工姓名'].values[0]}"
             )
-
-            edited_df = st.data_editor(df_extracted, num_rows="dynamic")
-            edited_df["参培数"] = (
-                edited_df["参培数(内单全职)"]
-                + edited_df["参培数(内单兼职)"]
-                + edited_df["参培数(外单全职)"]
-                + edited_df["参培数(外单兼职)"]
-            )
-
-            if st.button("💾 确认提交【日度】数据入库"):
-                date_str = p_date_img.strftime("%Y-%m-%d")
+        with col_del_p2:
+            st.write("")
+            st.write("")
+            if st.button("🗑️ 删除选中记录", type="primary"):
                 with sqlite3.connect(DB_PATH) as conn:
                     c = conn.cursor()
-                    for idx, row in edited_df.iterrows():
-                        c.execute(
-                            """INSERT INTO performance_data 
-                               (date, employee_name, invites, interviews, inner_ft, inner_pt, outer_ft, outer_pt, trainees) 
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                date_str,
-                                row["员工姓名"],
-                                int(row["邀约数"]),
-                                int(row["到面数"]),
-                                int(row["参培数(内单全职)"]),
-                                int(row["参培数(内单兼职)"]),
-                                int(row["参培数(外单全职)"]),
-                                int(row["参培数(外单兼职)"]),
-                                int(row["参培数"]),
-                            ),
-                        )
+                    c.execute("DELETE FROM performance_data WHERE id = ?", (perf_id_to_del,))
                     conn.commit()
-                st.balloons()
-                st.success(f"🎉 成功保存 {date_str} 日度业绩数据！")
+                st.success(f"✅ 业绩记录 #{perf_id_to_del} 已清除！")
+                st.rerun()
     else:
-        monthly_img = st.file_uploader(
-            "上传【单月累计】表格截图", type=["jpg", "png", "jpeg"]
-        )
-        if monthly_img is not None:
-            image = Image.open(monthly_img)
-            st.image(image, caption="已上传截图", width=400)
-
-            with st.spinner(
-                "🤖 正在调用通义千问视觉大模型识别表格数据，请稍候..."
-            ):
-                df_extracted = llm_supervisor_ocr(image, all_team_members)
-
-            st.info(
-                "💡 请在下方核对识图抓取结果，参培数会自动根据 4 个拆分项计算合计："
-            )
-
-            edited_df = st.data_editor(df_extracted, num_rows="dynamic")
-            edited_df["参培数"] = (
-                edited_df["参培数(内单全职)"]
-                + edited_df["参培数(内单兼职)"]
-                + edited_df["参培数(外单全职)"]
-                + edited_df["参培数(外单兼职)"]
-            )
-
-            if st.button("💾 确认提交【单月累计】数据入库"):
-                date_str = p_date_img.strftime("%Y-%m-%d")
-                with sqlite3.connect(DB_PATH) as conn:
-                    c = conn.cursor()
-                    for idx, row in edited_df.iterrows():
-                        c.execute(
-                            """INSERT INTO performance_data 
-                               (date, employee_name, month_invites, month_interviews, month_inner_ft, month_inner_pt, month_outer_ft, month_outer_pt, month_trainees) 
-                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                            (
-                                date_str,
-                                row["员工姓名"],
-                                int(row["邀约数"]),
-                                int(row["到面数"]),
-                                int(row["参培数(内单全职)"]),
-                                int(row["参培数(内单兼职)"]),
-                                int(row["参培数(外单全职)"]),
-                                int(row["参培数(外单兼职)"]),
-                                int(row["参培数"]),
-                            ),
-                        )
-                    conn.commit()
-                st.balloons()
-                st.success(f"🎉 成功保存 {date_str} 月度业绩数据！")
+        st.info("ℹ️ 暂无历史业绩表数据。")
 
 # ---------------------------------------------------------
-# 模块四：管理端
+# 模块四：管理端（后台管理与记录维护）
 # ---------------------------------------------------------
 elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
-    st.markdown(
-        "<div class='main-header'>⚙️ 后台管理中心 (管理员权限)</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<div class='main-header'>⚙️ 后台管理中心 (管理员权限)</div>", unsafe_allow_html=True)
 
     tab1, tab2 = st.tabs(["👤 员工与账号管理", "🗑️ 数据记录删除与维护"])
 
@@ -1161,9 +905,7 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                             (new_username, new_password, new_realname),
                         )
                         conn.commit()
-                    st.success(
-                        f"✅ 成功创建员工账号：{new_realname} ({new_username})"
-                    )
+                    st.success(f"✅ 成功创建员工账号：{new_realname} ({new_username})")
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("❌ 该登录账号已存在，请更换其他账号名！")
@@ -1178,6 +920,7 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                 "SELECT id as 用户编号, username as 账号, real_name as 姓名, role as 角色, password as 密码 FROM users",
                 conn,
             )
+        df_users.index = range(1, len(df_users) + 1)
         st.dataframe(df_users, use_container_width=True)
 
         st.write("---")
@@ -1193,15 +936,9 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
             current_user = df_users[df_users["用户编号"] == edit_user_id].iloc[0]
 
             col_e1, col_e2, col_e3, col_e4 = st.columns([1.5, 1.5, 1.5, 1])
-            edit_username = col_e1.text_input(
-                "登录账号", value=current_user["账号"], key="edit_username"
-            )
-            edit_realname = col_e2.text_input(
-                "真实姓名", value=current_user["姓名"], key="edit_realname"
-            )
-            edit_password = col_e3.text_input(
-                "密码", value=current_user["密码"], key="edit_password"
-            )
+            edit_username = col_e1.text_input("登录账号", value=current_user["账号"], key="edit_username")
+            edit_realname = col_e2.text_input("真实姓名", value=current_user["姓名"], key="edit_realname")
+            edit_password = col_e3.text_input("密码", value=current_user["密码"], key="edit_password")
 
             if col_e4.button("💾 保存修改", type="primary"):
                 try:
@@ -1209,12 +946,7 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                         c = conn.cursor()
                         c.execute(
                             "UPDATE users SET username = ?, real_name = ?, password = ? WHERE id = ?",
-                            (
-                                edit_username,
-                                edit_realname,
-                                edit_password,
-                                edit_user_id,
-                            ),
+                            (edit_username, edit_realname, edit_password, edit_user_id),
                         )
                         conn.commit()
                     st.success("✅ 账号信息更新成功！")
@@ -1236,9 +968,7 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
             if col_del_ubtn.button("🔥 确认删除账号", type="primary"):
                 with sqlite3.connect(DB_PATH) as conn:
                     c = conn.cursor()
-                    c.execute(
-                        "DELETE FROM users WHERE id = ?", (del_user_id,)
-                    )
+                    c.execute("DELETE FROM users WHERE id = ?", (del_user_id,))
                     conn.commit()
                 st.success("✅ 账号删除成功！")
                 st.rerun()
@@ -1256,14 +986,13 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
 
         if not df_records.empty:
             col_f1, col_f2 = st.columns(2)
-            filter_name = col_f1.selectbox(
-                "按员工筛选记录", ["全部"] + all_team_members
-            )
+            filter_name = col_f1.selectbox("按员工筛选记录", ["全部"] + all_team_members)
 
             df_show = df_records.copy()
             if filter_name != "全部":
                 df_show = df_show[df_show["员工姓名"] == filter_name]
 
+            df_show.index = range(1, len(df_show) + 1)
             st.dataframe(df_show, use_container_width=True, height=300)
 
             st.write("---")
@@ -1280,10 +1009,7 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                 if col_del_btn.button("🔥 确认删除记录", type="primary"):
                     with sqlite3.connect(DB_PATH) as conn:
                         c = conn.cursor()
-                        c.execute(
-                            "DELETE FROM platform_data WHERE id = ?",
-                            (selected_id,),
-                        )
+                        c.execute("DELETE FROM platform_data WHERE id = ?", (selected_id,))
                         conn.commit()
                     st.success(f"✅ 记录 #{selected_id} 已彻底删除！")
                     st.rerun()
