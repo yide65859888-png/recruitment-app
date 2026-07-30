@@ -226,7 +226,7 @@ def get_all_employee_names():
 
 
 # ---------------------------------------------------------
-# 3. 登录认证逻辑与 Session 状态
+# 3. 登录认证逻辑与 Session 状态（已修复点击多次问题）
 # ---------------------------------------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -238,9 +238,10 @@ if "logged_in" not in st.session_state:
 def verify_login(username, password):
     with sqlite3.connect(DB_PATH) as conn:
         c = conn.cursor()
+        # 增加 strip() 清除空格，防止隐形字符干扰
         c.execute(
             "SELECT username, real_name, role FROM users WHERE username = ? AND password = ?",
-            (username, password),
+            (username.strip(), password.strip()),
         )
         return c.fetchone()
 
@@ -254,21 +255,26 @@ if not st.session_state.logged_in:
     login_col1, login_col2, login_col3 = st.columns([1, 1.5, 1])
     with login_col2:
         st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
-        login_user = st.text_input("账号 / 员工姓名")
-        login_pwd = st.text_input("密码", type="password")
-        btn_login = st.button("🔐 登录系统", type="primary")
+        # 封装至 st.form 中，保证输入框值同步及回车提交
+        with st.form(key="login_form", clear_on_submit=False):
+            login_user = st.text_input("账号 / 员工姓名")
+            login_pwd = st.text_input("密码", type="password")
+            btn_login = st.form_submit_button("🔐 登录系统", type="primary")
 
-        if btn_login:
-            user_info = verify_login(login_user, login_pwd)
-            if user_info:
-                st.session_state.logged_in = True
-                st.session_state.username = user_info[0]
-                st.session_state.real_name = user_info[1]
-                st.session_state.role = user_info[2]
-                st.success("登录成功！正在跳转...")
-                st.rerun()
-            else:
-                st.error("❌ 账号或密码错误！(默认员工密码为 123456，管理员账号 admin/admin123)")
+            if btn_login:
+                if not login_user or not login_pwd:
+                    st.warning("⚠️ 请输入账号和密码！")
+                else:
+                    user_info = verify_login(login_user, login_pwd)
+                    if user_info:
+                        st.session_state.logged_in = True
+                        st.session_state.username = user_info[0]
+                        st.session_state.real_name = user_info[1]
+                        st.session_state.role = user_info[2]
+                        st.success("登录成功！正在跳转...")
+                        st.rerun()
+                    else:
+                        st.error("❌ 账号或密码错误！(默认员工密码为 123456，管理员账号 admin/admin123)")
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
