@@ -24,54 +24,56 @@ st.markdown(
     """
 <style>
     .stDeployButton {display:none;}
-    .main-header {font-size:22px; font-weight:bold; color:#1F4E79; margin-bottom:10px;}
+    .main-header {font-size:20px; font-weight:bold; color:#1F4E79; margin-bottom:10px;}
     
     .mobile-card {
         background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 10px;
+        padding: 12px;
+        border-radius: 8px;
         border: 1px solid #e9ecef;
-        margin-bottom: 15px;
+        margin-bottom: 12px;
     }
     
-    .alert-card-danger {background-color:#FFD2D2; border-left:6px solid #D8000C; padding:12px; border-radius:4px; margin-bottom:10px;}
-    .alert-card-warning {background-color:#FFF3CD; border-left:6px solid #856404; padding:12px; border-radius:4px; margin-bottom:10px;}
+    .alert-card-danger {background-color:#FFD2D2; border-left:4px solid #D8000C; padding:10px; border-radius:4px; margin-bottom:8px;}
+    .alert-card-warning {background-color:#FFF3CD; border-left:4px solid #856404; padding:10px; border-radius:4px; margin-bottom:8px;}
     
+    /* 需求3优化：将排名表边框改窄、收紧内边距与边距，减少不必要的空白 */
     .rank-box {
-        background: linear-gradient(135deg, #ffffff 0%, #f1f3f5 100%);
-        border-radius: 8px;
-        padding: 10px;
-        border: 1px solid #ced4da;
-        margin-bottom: 15px;
+        background: #ffffff;
+        border-radius: 6px;
+        padding: 6px 10px;
+        border: 1px solid #e2e8f0;
+        margin-bottom: 8px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.03);
     }
     .rank-title {
-        font-size: 14px;
+        font-size: 13px;
         font-weight: bold;
         color: #1F4E79;
-        margin-bottom: 8px;
-        border-bottom: 2px solid #1F4E79;
-        padding-bottom: 3px;
+        margin-bottom: 4px;
+        border-bottom: 1px solid #1F4E79;
+        padding-bottom: 2px;
     }
-    .rank-item-top1 { font-weight: bold; color: #D4AF37; margin: 3px 0; font-size: 12px; }
-    .rank-item-top2 { font-weight: bold; color: #708090; margin: 3px 0; font-size: 12px; }
-    .rank-item-top3 { font-weight: bold; color: #B87333; margin: 3px 0; font-size: 12px; }
-    .rank-item-normal { font-weight: normal; color: #495057; margin: 3px 0; font-size: 12px; }
+    .rank-item-top1 { font-weight: bold; color: #D4AF37; margin: 2px 0; font-size: 12px; line-height: 1.2; }
+    .rank-item-top2 { font-weight: bold; color: #708090; margin: 2px 0; font-size: 12px; line-height: 1.2; }
+    .rank-item-top3 { font-weight: bold; color: #B87333; margin: 2px 0; font-size: 12px; line-height: 1.2; }
+    .rank-item-normal { font-weight: normal; color: #495057; margin: 2px 0; font-size: 12px; line-height: 1.2; }
     
     .stButton>button {
         width: 100%;
-        border-radius: 8px;
-        height: 45px;
+        border-radius: 6px;
+        height: 40px;
         font-weight: bold;
     }
     
     .user-badge {
-        padding: 6px 12px;
+        padding: 4px 10px;
         background-color: #e9ecef;
-        border-radius: 20px;
-        font-size: 13px;
+        border-radius: 16px;
+        font-size: 12px;
         font-weight: bold;
         color: #1F4E79;
-        margin-bottom: 15px;
+        margin-bottom: 12px;
     }
 </style>
 """,
@@ -242,6 +244,9 @@ if "logged_in" not in st.session_state:
     st.session_state.username = ""
     st.session_state.real_name = ""
     st.session_state.role = ""
+
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = 0
 
 
 def verify_login(username, password):
@@ -714,6 +719,7 @@ def run_alert_engine(df_summary, is_monthly=False):
 
 
 def render_full_ranking(df, col_name, title_name, unit=""):
+    """需求3优化：渲染边框更窄、留白更紧凑的排名卡片"""
     df_sorted = df.sort_values(by=col_name, ascending=False).reset_index(
         drop=True
     )
@@ -813,8 +819,12 @@ if page == "📱 员工端：手机填报与截图上传":
 
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("2️⃣ 上传平台截图")
+
+    # 需求1优化：使用动态 key 绑定的 file_uploader，上传成功后重置该 key 即可自动清空文件
     uploaded_file = st.file_uploader(
-        "点击上传或手机拍照", type=["jpg", "png", "jpeg"]
+        "点击上传或手机拍照",
+        type=["jpg", "png", "jpeg"],
+        key=f"uploader_{st.session_state.uploader_key}",
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -851,10 +861,14 @@ if page == "📱 员工端：手机填报与截图上传":
                     ),
                 )
                 conn.commit()
+
+            # 需求1：提交成功后累加 uploader_key，促使图片框自动清空
+            st.session_state.uploader_key += 1
+
             st.balloons()
             st.success(
                 f"🎉 提交成功！[{emp_name}] 在 [{date_str}] 的 [{platform_ver}]"
-                " 数据已更新覆盖！"
+                " 数据已更新覆盖！图片上传框已清空。"
             )
             st.rerun()
 
@@ -928,11 +942,13 @@ elif page == "📊 业务预警与数据看板":
         month_str = f"{selected_year}-{selected_m_str.replace('月', '')}"
         date_filter_p = f"{month_str}%"
         date_filter_perf = f"{month_str}%"
+        current_time_tag = month_str  # 用于导出的周期标识 (YYYY-MM)
     else:
         selected_date = col_date.date_input("选择统计日期", YESTERDAY)
         date_str = selected_date.strftime("%Y-%m-%d")
         date_filter_p = date_str
         date_filter_perf = date_str
+        current_time_tag = date_str  # 用于导出的具体日期标识 (YYYY-MM-DD)
 
     if not is_admin:
         selected_employees = [st.session_state.real_name]
@@ -1056,9 +1072,7 @@ elif page == "📊 业务预警与数据看板":
         "到面转化率",
     ]
 
-    st.subheader(
-        f"📋 招聘全链路汇总表 ({month_str if '单月' in view_mode else date_str})"
-    )
+    st.subheader(f"📋 招聘全链路汇总表 ({current_time_tag})")
 
     df_board_show = df_display[final_cols].copy()
     df_board_show.index = range(1, len(df_board_show) + 1)
@@ -1068,20 +1082,27 @@ elif page == "📊 业务预警与数据看板":
         use_container_width=True,
     )
 
+    # 需求2优化：在导出的 Dataframe 中注入时间字段（日报表显示具体日期，月报表显示周期月份）
+    date_col_name = "周期月份" if "单月" in view_mode else "具体日期"
+    df_export = df_display[final_cols].copy()
+    df_export.insert(0, date_col_name, current_time_tag)
+
     st.markdown("##### 📥 导出数据")
     col_exp1, col_exp2 = st.columns([1, 1])
+
+    report_type_name = "月报表" if "单月" in view_mode else "日报表"
 
     with col_exp1:
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-            df_display[final_cols].to_excel(
-                writer, index=False, sheet_name="招聘数据"
+            df_export.to_excel(
+                writer, index=False, sheet_name=report_type_name
             )
         st.download_button(
-            label="📊 导出 Excel 表格 (.xlsx)",
+            label=f"📊 导出 {report_type_name} Excel (.xlsx)",
             data=excel_buffer.getvalue(),
             file_name=(
-                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in view_mode else date_str}.xlsx"
+                f"招聘{report_type_name}_{st.session_state.real_name}_{current_time_tag}.xlsx"
             ),
             mime=(
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -1089,14 +1110,12 @@ elif page == "📊 业务预警与数据看板":
         )
 
     with col_exp2:
-        csv_bytes = df_display[final_cols].to_csv(index=False).encode(
-            "utf-8-sig"
-        )
+        csv_bytes = df_export.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
-            label="📄 导出 CSV 文件 (.csv)",
+            label=f"📄 导出 {report_type_name} CSV (.csv)",
             data=csv_bytes,
             file_name=(
-                f"招聘数据_{st.session_state.real_name}_{month_str if '单月' in view_mode else date_str}.csv"
+                f"招聘{report_type_name}_{st.session_state.real_name}_{current_time_tag}.csv"
             ),
             mime="text/csv",
         )
