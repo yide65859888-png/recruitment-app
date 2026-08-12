@@ -1596,8 +1596,28 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                                 except:
                                     r[ic] = 0
                                     
-                    # 写入 Supabase 数据库
-                    supabase.table("platform_data").upsert(records, on_conflict="date,employee_name,platform_version").execute()
+                  # 写入 SQLite 数据库
+                    with sqlite3.connect(DB_PATH) as conn:
+                        c = conn.cursor()
+                        for r in records:
+                            c.execute("""
+                                INSERT OR REPLACE INTO platform_data 
+                                (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, i_communicated, received_resumes, exchanged_contact, accepted_interview)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                r.get('date'),
+                                r.get('employee_name'),
+                                r.get('platform_version', '综合'),
+                                r.get('i_looked', 0),
+                                r.get('seen_me', 0),
+                                r.get('i_greeted', 0),
+                                r.get('candidate_greeted', 0),
+                                r.get('i_communicated', 0),
+                                r.get('received_resumes', 0),
+                                r.get('exchanged_contact', 0),
+                                r.get('accepted_interview', 0)
+                            ))
+                        conn.commit()
                     st.success(f"🎉 成功导入 {len(records)} 条历史记录！")
                     st.balloons()
         except Exception as e:
