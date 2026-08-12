@@ -1537,13 +1537,13 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                     st.rerun()
         else:
             st.info("ℹ️ 暂无平台提交记录。")
-            # ==========================================
-# 独立模块：历史数据批量恢复/导入
+          # ==========================================
+# 独立模块：历史数据批量恢复/导入（修正匹配版）
 # ==========================================
 st.sidebar.markdown("---")
 if st.sidebar.checkbox("📁 展开历史数据导入工具"):
     st.header("📁 历史日报表恢复与批量导入")
-    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并保存到云数据库。")
+    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并保存到数据库。")
     
     import_date = st.date_input("选择历史数据归属日期", datetime.date.today(), key="batch_import_date")
     uploaded_file = st.file_uploader("选择之前导出的日报表文件", type=["xlsx", "csv"], key="batch_import_file")
@@ -1558,24 +1558,37 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
             st.write("📖 **读取到的数据预览：**")
             st.dataframe(import_df.head(10), use_container_width=True)
             
-            # 列名映射
+            # 精准列名映射表
             col_map = {
                 "员工姓名": "employee_name",
                 "平台版本": "platform_version",
-                "看过我": "i_looked",
+                "我看过": "i_looked",
+                "看过我": "seen_me",
                 "看过我(次)": "seen_me",
                 "我打招呼": "i_greeted",
+                "牛人新招呼": "candidate_greeted",
                 "牛人招呼": "candidate_greeted",
+                "我沟通": "i_communicated",
                 "沟通人数": "i_communicated",
+                "收获简历": "received_resumes",
                 "收到简历": "received_resumes",
+                "交换电话微信": "exchanged_contact",
                 "获取联系": "exchanged_contact",
-                "接受面试": "accepted_interview"
+                "接受面试": "accepted_interview",
+                "邀约数": "invited",
+                "到面数": "interviewed",
+                "参培数(内单全职)": "trained_fulltime",
+                "参培数(内单兼职)": "trained_parttime",
+                "参培数(外单全职)": "trained_out_fulltime",
+                "参培数(外单兼职)": "trained_out_parttime",
+                "参培数": "trained_total"
             }
             
             if st.button("🚀 确认导入并保存", use_container_width=True, key="btn_confirm_import"):
+                # 过滤并重命名列
                 valid_cols = [c for c in import_df.columns if c in col_map]
                 if not valid_cols:
-                    st.error("无法识别列名，请上传从系统导出的日报表。")
+                    st.error("无法识别列名，请确认上传的文件包含标准的招聘表头。")
                 else:
                     ready_df = import_df[valid_cols].rename(columns=col_map)
                     ready_df['date'] = str(import_date)
@@ -1587,38 +1600,42 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                         ready_df = ready_df[~ready_df['employee_name'].astype(str).str.contains('合计|总计|NaN')]
                     
                     records = ready_df.to_dict(orient='records')
-                    int_cols = ["i_looked", "seen_me", "i_greeted", "candidate_greeted", "i_communicated", "received_resumes", "exchanged_contact", "accepted_interview"]
-                    for r in records:
-                        for ic in int_cols:
-                            if ic in r:
-                                try:
-                                    r[ic] = int(r[ic])
-                                except:
-                                    r[ic] = 0
-                                    
-                  # 写入 SQLite 数据库
+                    
+                    # 写入 SQLite 数据库（平台前段数据 + 转化后段数据）
                     with sqlite3.connect(DB_PATH) as conn:
                         c = conn.cursor()
                         for r in records:
+                            # 1. 写入平台前段数据表
                             c.execute("""
                                 INSERT OR REPLACE INTO platform_data 
                                 (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, i_communicated, received_resumes, exchanged_contact, accepted_interview)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (
-                                r.get('date'),
-                                r.get('employee_name'),
-                                r.get('platform_version', '综合'),
-                                r.get('i_looked', 0),
-                                r.get('seen_me', 0),
-                                r.get('i_greeted', 0),
-                                r.get('candidate_greeted', 0),
-                                r.get('i_communicated', 0),
-                                r.get('received_resumes', 0),
-                                r.get('exchanged_contact', 0),
-                                r.get('accepted_interview', 0)
+                                r.get('date'), r.get('employee_name'), r.get('platform_version', '综合'),
+                                int(r.get('i_looked', 0)), int(r.get('seen_me', 0)), int(r.get('i_greeted', 0)),
+                                int(r.get('candidate_greeted', 0)), int(r.get('i_communicated', 0)),
+                                int(r.get('received_resumes', 0)), int(r.get('exchanged_contact', 0)),
+                                int(r.get('accepted_interview', 0))
                             ))
+                            
+                            # 2. 写入流程转化后段数据表（如果对应表存在）
+                            try:
+                                c.execute("""
+                                    INSERT OR REPLACE INTO conversion_data 
+                                    (date, employee_name, invited, interviewed, trained_fulltime, trained_parttime, trained_out_fulltime, trained_out_parttime, trained_total)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                """, (
+                                    r.get('date'), r.get('employee_name'),
+                                    int(r.get('invited', 0)), int(r.get('interviewed', 0)),
+                                    int(r.get('trained_fulltime', 0)), int(r.get('trained_parttime', 0)),
+                                    int(r.get('trained_out_fulltime', 0)), int(r.get('trained_out_parttime', 0)),
+                                    int(r.get('trained_total', 0))
+                                ))
+                            except Exception:
+                                pass
+                                
                         conn.commit()
-                    st.success(f"🎉 成功导入 {len(records)} 条历史记录！")
+                    st.success(f"🎉 成功导入并纠正 {len(records)} 条完整历史数据！")
                     st.balloons()
         except Exception as e:
             st.error(f"解析文件失败: {e}")
