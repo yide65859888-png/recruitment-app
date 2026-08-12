@@ -1,8 +1,6 @@
 streamlit
 pandas
 pillow
-qrcode
 openai
 openpyxl
-psycopg2-binary
-sqlalchemy
+supabase
