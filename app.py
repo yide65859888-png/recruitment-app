@@ -37,7 +37,6 @@ st.markdown(
     .alert-card-danger {background-color:#FFD2D2; border-left:4px solid #D8000C; padding:10px; border-radius:4px; margin-bottom:8px;}
     .alert-card-warning {background-color:#FFF3CD; border-left:4px solid #856404; padding:10px; border-radius:4px; margin-bottom:8px;}
     
-    /* 需求3优化：将排名表边框改窄、收紧内边距与边距，减少不必要的空白 */
     .rank-box {
         background: #ffffff;
         border-radius: 6px;
@@ -131,7 +130,6 @@ TARGET_HEADERS = [
 # ---------------------------------------------------------
 @st.cache_resource
 def get_llm_client():
-    """全局单例 LLM 客户端，避免重复建立 HTTP 连接"""
     return OpenAI(
         api_key=QWEN_CONFIG["api_key"], base_url=QWEN_CONFIG["base_url"]
     )
@@ -297,7 +295,6 @@ if not st.session_state.logged_in:
 # 4. 辅助函数与视觉 AI OCR 及大模型诊断引擎
 # ---------------------------------------------------------
 def mock_employee_ocr(image: Image.Image) -> dict:
-    """接入通义千问大模型精准抓取截图数据，以固定8个数据表头为主锚点"""
     default_result = {
         "i_looked": 0,
         "seen_me": 0,
@@ -395,7 +392,6 @@ def mock_employee_ocr(image: Image.Image) -> dict:
 
 
 def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
-    """使用 SiliconFlow 通义千问多模态模型识别招聘数据表格（含自动对齐与长度校验防报错）"""
     try:
         client = get_llm_client()
 
@@ -517,13 +513,9 @@ def check_existing_record(date_str, emp_name, platform):
 
 
 def generate_enhanced_ai_diagnosis(df_summary, is_monthly=False):
-    """
-    升级版 AI 诊断引擎：涵盖过程影响分析、三维预警（引流/产能/跟进）、优缺点及下一步安排
-    """
     client = get_llm_client()
     time_tag = "月度" if is_monthly else "日度"
 
-    # 过滤掉“合计”行，转换纯数据 JSON
     df_filtered = df_summary[df_summary["员工姓名"] != "合计"].copy()
     summary_data_json = df_filtered.to_json(
         orient="records", force_ascii=False
@@ -597,7 +589,6 @@ def generate_enhanced_ai_diagnosis(df_summary, is_monthly=False):
 
 
 def render_full_ranking(df, col_name, title_name, unit=""):
-    """需求3优化：渲染边框更窄、留白更紧凑的排名卡片"""
     df_sorted = df.sort_values(by=col_name, ascending=False).reset_index(
         drop=True
     )
@@ -698,7 +689,6 @@ if page == "📱 员工端：手机填报与截图上传":
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("2️⃣ 上传平台截图")
 
-    # 需求1优化：使用动态 key 绑定的 file_uploader，上传成功后重置该 key 即可自动清空文件
     uploaded_file = st.file_uploader(
         "点击上传或手机拍照",
         type=["jpg", "png", "jpeg"],
@@ -740,7 +730,6 @@ if page == "📱 员工端：手机填报与截图上传":
                 )
                 conn.commit()
 
-            # 需求1：提交成功后累加 uploader_key，促使图片框自动清空
             st.session_state.uploader_key += 1
 
             st.balloons()
@@ -796,7 +785,7 @@ if page == "📱 员工端：手机填报与截图上传":
         st.info("ℹ️ 暂无历史上传记录。")
 
 # ---------------------------------------------------------
-# 模块二：数据看板（包含最新 9 大 KPI 指标排名区与 AI 深度诊断）
+# 模块二：数据看板
 # ---------------------------------------------------------
 elif page == "📊 业务预警与数据看板":
     st.markdown(
@@ -820,13 +809,13 @@ elif page == "📊 业务预警与数据看板":
         month_str = f"{selected_year}-{selected_m_str.replace('月', '')}"
         date_filter_p = f"{month_str}%"
         date_filter_perf = f"{month_str}%"
-        current_time_tag = month_str  # 用于导出的周期标识 (YYYY-MM)
+        current_time_tag = month_str
     else:
         selected_date = col_date.date_input("选择统计日期", YESTERDAY)
         date_str = selected_date.strftime("%Y-%m-%d")
         date_filter_p = date_str
         date_filter_perf = date_str
-        current_time_tag = date_str  # 用于导出的具体日期标识 (YYYY-MM-DD)
+        current_time_tag = date_str
 
     if not is_admin:
         selected_employees = [st.session_state.real_name]
@@ -960,7 +949,6 @@ elif page == "📊 业务预警与数据看板":
         use_container_width=True,
     )
 
-    # 需求2优化：在导出的 Dataframe 中注入时间字段（日报表显示具体日期，月报表显示周期月份）
     date_col_name = "周期月份" if "单月" in view_mode else "具体日期"
     df_export = df_display[final_cols].copy()
     df_export.insert(0, date_col_name, current_time_tag)
@@ -998,14 +986,10 @@ elif page == "📊 业务预警与数据看板":
             mime="text/csv",
         )
 
-    # ---------------------------------------------------------
-    # 📌 精简后的 9 大 KPI 团队排名面板
-    # ---------------------------------------------------------
     if is_admin and len(df_summary) > 1:
         st.write("---")
         st.subheader("📊 招聘关键过程与结果指标团队排名")
 
-        # 第一排：曝光与主动动作（3个）
         r1_col1, r1_col2, r1_col3 = st.columns(3)
         with r1_col1:
             render_full_ranking(df_summary, "看过我", "看过我人数", "人")
@@ -1013,12 +997,11 @@ elif page == "📊 业务预警与数据看板":
             render_full_ranking(
                 df_summary, "我打招呼", "我打招呼次数", "次"
             )
-        with r1_col3:
+        with r3_col3:
             render_full_ranking(
                 df_summary, "牛人新招呼", "牛人新招呼数", "个"
             )
 
-        # 第二排：沟通与留存转化（3个）
         r2_col1, r2_col2, r2_col3 = st.columns(3)
         with r2_col1:
             render_full_ranking(df_summary, "我沟通", "我沟通人数", "人")
@@ -1031,7 +1014,6 @@ elif page == "📊 业务预警与数据看板":
                 df_summary, "收获简历", "收获简历数量", "份"
             )
 
-        # 第三排：邀约与终局结果（3个）
         r3_col1, r3_col2, r3_col3 = st.columns(3)
         with r3_col1:
             render_full_ranking(df_summary, "邀约数", "新增邀约数", "人")
@@ -1040,9 +1022,6 @@ elif page == "📊 业务预警与数据看板":
         with r3_col3:
             render_full_ranking(df_summary, "参培数", "参培数", "人")
 
-    # ---------------------------------------------------------
-    # 🤖 AI 大模型诊断与下一步优化安排模块
-    # ---------------------------------------------------------
     st.write("---")
     st.subheader("🤖 全链路数据诊断与下一步优化安排 (AI 引擎)")
 
@@ -1264,7 +1243,9 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
         unsafe_allow_html=True,
     )
 
-    tab1, tab2 = st.tabs(["👤 员工与账号管理", "🗑️ 数据记录删除与维护"])
+    tab1, tab2, tab3 = st.tabs(
+        ["👤 员工与账号管理", "🗑️ 数据记录删除与维护", "📥 历史数据导入(平台日报表)"]
+    )
 
     with tab1:
         st.subheader("➕ 新增员工账号")
@@ -1436,3 +1417,165 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                     st.rerun()
         else:
             st.info("ℹ️ 暂无平台提交记录。")
+
+    # 新增历史数据导入 Tab 页
+    with tab3:
+        st.subheader("📥 批量导入平台历史日报表")
+        st.warning(
+            "⚠️ 注意：本次导入为**单次全量替换**模式！导入所选具体日期的数据时，系统将清空该日期之前已存在的历史记录，**仅保留最后一版上传的数据**。"
+        )
+
+        col_import_date, col_import_file = st.columns([1, 2])
+        import_date = col_import_date.date_input(
+            "选择历史日报表归属日期",
+            YESTERDAY,
+            key="history_import_date",
+        )
+        import_date_str = import_date.strftime("%Y-%m-%d")
+
+        uploaded_history_file = col_import_file.file_uploader(
+            "上传平台历史日报表 (.xlsx / .csv)",
+            type=["xlsx", "xls", "csv"],
+            key="history_daily_uploader",
+        )
+
+        if uploaded_history_file is not None:
+            try:
+                if uploaded_history_file.name.endswith(".csv"):
+                    df_history = pd.read_csv(uploaded_history_file)
+                else:
+                    df_history = pd.read_excel(uploaded_history_file)
+
+                # 去除表头的空格
+                df_history.columns = [
+                    str(c).strip() for c in df_history.columns
+                ]
+
+                # 去除所有字符串列的前后空格
+                for col in df_history.select_dtypes(
+                    include=["object"]
+                ).columns:
+                    df_history[col] = df_history[col].astype(str).str.strip()
+
+                st.markdown("##### 🔍 导入前数据预检：")
+                st.dataframe(df_history, use_container_width=True)
+
+                if st.button("🚀 确认单次替换导入历史数据", type="primary"):
+                    # 字段映射字典，适配可能的列名格式
+                    field_mapping = {
+                        "员工姓名": [
+                            "员工姓名",
+                            "员工",
+                            "姓名",
+                            "招聘专员",
+                        ],
+                        "平台账号": [
+                            "平台账号",
+                            "平台",
+                            "账号",
+                            "平台版本",
+                        ],
+                        "我看过": ["我看过"],
+                        "看过我": ["看过我"],
+                        "我打招呼": ["我打招呼"],
+                        "牛人新招呼": ["牛人新招呼"],
+                        "我沟通": ["我沟通"],
+                        "收获简历": ["收获简历", "收到简历"],
+                        "交换电话微信": [
+                            "交换电话微信",
+                            "交换微信/电话",
+                            "交换电话/微信",
+                            "留存微信",
+                        ],
+                        "接受面试": ["接受面试"],
+                    }
+
+                    # 匹配实际表头
+                    matched_cols = {}
+                    for target, candidates in field_mapping.items():
+                        found = None
+                        for cand in candidates:
+                            if cand in df_history.columns:
+                                found = cand
+                                break
+                        matched_cols[target] = found
+
+                    if not matched_cols["员工姓名"]:
+                        st.error(
+                            "❌ 表格中缺失【员工姓名】列，请检查模版表头！"
+                        )
+                    else:
+                        rows_to_insert = []
+                        for _, row in df_history.iterrows():
+                            emp_name = str(row[matched_cols["员工姓名"]]).strip()
+
+                            # 过滤掉合计行或空名字行
+                            if not emp_name or emp_name in ["合计", "nan"]:
+                                continue
+
+                            platform_val = (
+                                str(row[matched_cols["平台账号"]]).strip()
+                                if matched_cols["平台账号"]
+                                else "易德Boss1号"
+                            )
+
+                            def get_num(key):
+                                col = matched_cols[key]
+                                if col and col in row:
+                                    val = str(row[col])
+                                    m = re.search(r"\d+", val)
+                                    return int(m.group()) if m else 0
+                                return 0
+
+                            i_looked = get_num("我看过")
+                            seen_me = get_num("看过我")
+                            i_greeted = get_num("我打招呼")
+                            candidate_greeted = get_num("牛人新招呼")
+                            i_communicated = get_num("我沟通")
+                            received_resumes = get_num("收获简历")
+                            exchanged_contact = get_num("交换电话微信")
+                            accepted_interview = get_num("接受面试")
+
+                            rows_to_insert.append((
+                                import_date_str,
+                                emp_name,
+                                platform_val,
+                                i_looked,
+                                seen_me,
+                                i_greeted,
+                                candidate_greeted,
+                                i_communicated,
+                                received_resumes,
+                                exchanged_contact,
+                                accepted_interview,
+                            ))
+
+                        if rows_to_insert:
+                            with sqlite3.connect(DB_PATH) as conn:
+                                c = conn.cursor()
+
+                                # 清空指定日期现有的所有历史数据（保证单次替换、不加累计）
+                                c.execute(
+                                    "DELETE FROM platform_data WHERE date = ?",
+                                    (import_date_str,),
+                                )
+
+                                # 批量写入最后一版导入的数据
+                                c.executemany(
+                                    """INSERT INTO platform_data 
+                                       (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, i_communicated, received_resumes, exchanged_contact, accepted_interview, created_at)
+                                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                                    rows_to_insert,
+                                )
+                                conn.commit()
+
+                            st.balloons()
+                            st.success(
+                                f"🎉 成功覆盖导入 {import_date_str} 的 {len(rows_to_insert)} 条平台历史日报表数据！"
+                            )
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ 表格中未提取到有效的员工数据。")
+
+            except Exception as e:
+                st.error(f"❌ 读取表格数据失败，请确认文件格式: {e}")
