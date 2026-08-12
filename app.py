@@ -1049,15 +1049,12 @@ elif page == "📊 业务预警与数据看板":
     df_display = pd.concat(
         [df_summary, pd.DataFrame([total_row])], ignore_index=True
     )
-   if "到面转化率数值" in df_display.columns:
-    df_display["到面转化率"] = df_display["到面转化率数值"].fillna(0).apply(lambda x: f"{x:.1f}%")
-else:
-    df_display["到面转化率"] = df_display.apply(
-        lambda r: f"{round((r.get('到面数', 0) / r.get('邀约数', 1) * 100), 1)}%" if r.get('邀约数', 0) > 0 else "0.0%", 
-        axis=1
-    )
-    )
-
+     if "到面转化率数值" in df_display.columns:
+        df_display["到面转化率"] = df_display["到面转化率数值"].fillna(0).apply(lambda x: f"{x:.1f}%")
+        else:
+        df_display["到面转化率"] = df_display.apply(
+            lambda r: f"{round((r.get('到面数', 0) / r.get('邀约数', 1) * 100), 1)}%" if r.get('邀约数', 0) > 0 else "0.0%", 
+            axis=1)
     final_cols = [
         "员工姓名",
         "我看过",
