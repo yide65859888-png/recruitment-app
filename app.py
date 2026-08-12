@@ -4,11 +4,11 @@ import datetime
 import io
 import json
 import re
+import sqlite3
 from openai import OpenAI
 import pandas as pd
 from PIL import Image
 import streamlit as st
-from supabase import create_client, Client
 
 # ---------------------------------------------------------
 # 1. 页面基本配置
@@ -37,6 +37,7 @@ st.markdown(
     .alert-card-danger {background-color:#FFD2D2; border-left:4px solid #D8000C; padding:10px; border-radius:4px; margin-bottom:8px;}
     .alert-card-warning {background-color:#FFF3CD; border-left:4px solid #856404; padding:10px; border-radius:4px; margin-bottom:8px;}
     
+    /* 需求3优化：将排名表边框改窄、收紧内边距与边距，减少不必要的空白 */
     .rank-box {
         background: #ffffff;
         border-radius: 6px;
@@ -104,6 +105,7 @@ PLATFORM_OPTIONS = [
 ]
 
 YESTERDAY = datetime.date.today() - datetime.timedelta(days=1)
+DB_PATH = "recruitment_data.db"
 
 QWEN_CONFIG = {
     "api_key": "sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy",
@@ -112,60 +114,127 @@ QWEN_CONFIG = {
     "enable_thinking": False,
 }
 
-# ---------------------------------------------------------
-# 2. Supabase 数据库与 LLM 客户端初始化
-# ---------------------------------------------------------
-@st.cache_resource
-def get_supabase_client() -> Client:
-    """初始化并缓存 Supabase 客户端"""
-    url = st.secrets["supabase"]["SUPABASE_URL"]
-    key = st.secrets["supabase"]["SUPABASE_KEY"]
-    return create_client(url, key)
+TARGET_HEADERS = [
+    "我看过",
+    "看过我",
+    "我打招呼",
+    "牛人新招呼",
+    "我沟通",
+    "收获简历",
+    "交换电话微信",
+    "接受面试",
+]
 
-supabase = get_supabase_client()
 
+# ---------------------------------------------------------
+# 2. 数据库初始化与 LLM 客户端初始化
+# ---------------------------------------------------------
 @st.cache_resource
 def get_llm_client():
-    """全局单例 LLM 客户端"""
+    """全局单例 LLM 客户端，避免重复建立 HTTP 连接"""
     return OpenAI(
         api_key=QWEN_CONFIG["api_key"], base_url=QWEN_CONFIG["base_url"]
     )
 
-def init_db():
-    """初始化 Supabase 账号默认数据（包含 admin 及默认团队成员）"""
-    try:
-        # 校验 admin 是否存在
-        res = supabase.table("users").select("*").eq("username", "admin").execute()
-        if not res.data:
-            supabase.table("users").insert({
-                "username": "admin",
-                "password": "admin123",
-                "real_name": "系统管理员",
-                "role": "admin"
-            }).execute()
 
-        # 校验默认员工是否存在
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+
+        c.execute("""CREATE TABLE IF NOT EXISTS platform_data (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT, 
+                        employee_name TEXT, 
+                        platform_version TEXT,
+                        i_looked INTEGER DEFAULT 0,
+                        seen_me INTEGER DEFAULT 0, 
+                        i_greeted INTEGER DEFAULT 0,
+                        candidate_greeted INTEGER DEFAULT 0,
+                        i_communicated INTEGER DEFAULT 0,
+                        received_resumes INTEGER DEFAULT 0, 
+                        exchanged_contact INTEGER DEFAULT 0,
+                        accepted_interview INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(date, employee_name, platform_version)
+                    )""")
+
+        c.execute("PRAGMA table_info(platform_data)")
+        existing_cols = [col[1] for col in c.fetchall()]
+
+        required_cols = {
+            "i_looked": "INTEGER DEFAULT 0",
+            "seen_me": "INTEGER DEFAULT 0",
+            "i_greeted": "INTEGER DEFAULT 0",
+            "candidate_greeted": "INTEGER DEFAULT 0",
+            "i_communicated": "INTEGER DEFAULT 0",
+            "received_resumes": "INTEGER DEFAULT 0",
+            "exchanged_contact": "INTEGER DEFAULT 0",
+            "accepted_interview": "INTEGER DEFAULT 0",
+        }
+
+        for col_name, col_type in required_cols.items():
+            if col_name not in existing_cols:
+                try:
+                    c.execute(
+                        f"ALTER TABLE platform_data ADD COLUMN {col_name} {col_type}"
+                    )
+                except Exception:
+                    pass
+
+        c.execute("""CREATE TABLE IF NOT EXISTS performance_data (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT, 
+                        employee_name TEXT,
+                        invites INTEGER DEFAULT 0, 
+                        interviews INTEGER DEFAULT 0, 
+                        inner_ft INTEGER DEFAULT 0, 
+                        inner_pt INTEGER DEFAULT 0, 
+                        outer_ft INTEGER DEFAULT 0, 
+                        outer_pt INTEGER DEFAULT 0, 
+                        trainees INTEGER DEFAULT 0,
+                        month_invites INTEGER DEFAULT 0, 
+                        month_interviews INTEGER DEFAULT 0, 
+                        month_inner_ft INTEGER DEFAULT 0, 
+                        month_inner_pt INTEGER DEFAULT 0, 
+                        month_outer_ft INTEGER DEFAULT 0, 
+                        month_outer_pt INTEGER DEFAULT 0, 
+                        month_trainees INTEGER DEFAULT 0
+                    )""")
+
+        c.execute("""CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        username TEXT UNIQUE,
+                        password TEXT,
+                        real_name TEXT,
+                        role TEXT DEFAULT 'employee'
+                    )""")
+
+        c.execute("SELECT COUNT(*) FROM users WHERE username = 'admin'")
+        if c.fetchone()[0] == 0:
+            c.execute(
+                "INSERT INTO users (username, password, real_name, role) VALUES ('admin', 'admin123', '系统管理员', 'admin')"
+            )
+
         for name in DEFAULT_MEMBERS:
-            res_m = supabase.table("users").select("*").eq("real_name", name).execute()
-            if not res_m.data:
-                supabase.table("users").insert({
-                    "username": name,
-                    "password": "123456",
-                    "real_name": name,
-                    "role": "employee"
-                }).execute()
-    except Exception as e:
-        st.error(f"⚠️ 无法连接至 Supabase 数据库，请检查 secrets 配置！详情: {e}")
+            c.execute("SELECT COUNT(*) FROM users WHERE real_name = ?", (name,))
+            if c.fetchone()[0] == 0:
+                c.execute(
+                    "INSERT INTO users (username, password, real_name, role) VALUES (?, '123456', ?, 'employee')",
+                    (name, name),
+                )
+        conn.commit()
+
 
 init_db()
 
+
 def get_all_employee_names():
-    try:
-        res = supabase.table("users").select("real_name").eq("role", "employee").execute()
-        names = [r["real_name"] for r in res.data]
-        return names if names else DEFAULT_MEMBERS
-    except Exception:
-        return DEFAULT_MEMBERS
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute("SELECT real_name FROM users WHERE role = 'employee'")
+        names = [r[0] for r in c.fetchall()]
+    return names if names else DEFAULT_MEMBERS
+
 
 # ---------------------------------------------------------
 # 3. 登录认证逻辑与 Session 状态
@@ -179,12 +248,16 @@ if "logged_in" not in st.session_state:
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
+
 def verify_login(username, password):
-    res = supabase.table("users").select("username, real_name, role").eq("username", username.strip()).eq("password", password.strip()).execute()
-    if res.data:
-        u = res.data[0]
-        return u["username"], u["real_name"], u["role"]
-    return None
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT username, real_name, role FROM users WHERE username = ? AND password = ?",
+            (username.strip(), password.strip()),
+        )
+        return c.fetchone()
+
 
 if not st.session_state.logged_in:
     st.markdown(
@@ -219,10 +292,12 @@ if not st.session_state.logged_in:
         st.markdown("</div>", unsafe_allow_html=True)
     st.stop()
 
+
 # ---------------------------------------------------------
 # 4. 辅助函数与视觉 AI OCR 及大模型诊断引擎
 # ---------------------------------------------------------
 def mock_employee_ocr(image: Image.Image) -> dict:
+    """接入通义千问大模型精准抓取截图数据，以固定8个数据表头为主锚点"""
     default_result = {
         "i_looked": 0,
         "seen_me": 0,
@@ -313,11 +388,14 @@ def mock_employee_ocr(image: Image.Image) -> dict:
         return default_result
 
     except Exception as e:
-        st.warning(f"⚠️ 视觉模型识别出现波动 ({e})，系统已采用缺省填报架构。")
+        st.warning(
+            f"⚠️ 视觉模型识别出现波动 ({e})，系统已采用缺省填报架构。"
+        )
         return default_result
 
 
 def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
+    """使用 SiliconFlow 通义千问多模态模型识别招聘数据表格（含自动对齐与长度校验防报错）"""
     try:
         client = get_llm_client()
 
@@ -428,14 +506,24 @@ def llm_supervisor_ocr(image: Image.Image, members: list) -> pd.DataFrame:
 
 
 def check_existing_record(date_str, emp_name, platform):
-    res = supabase.table("platform_data").select("created_at").eq("date", date_str).eq("employee_name", emp_name).eq("platform_version", platform).execute()
-    return res.data[0]["created_at"] if res.data else None
+    with sqlite3.connect(DB_PATH) as conn:
+        c = conn.cursor()
+        c.execute(
+            "SELECT created_at FROM platform_data WHERE date = ? AND employee_name = ? AND platform_version = ?",
+            (date_str, emp_name, platform),
+        )
+        res = c.fetchone()
+        return res[0] if res else None
 
 
 def generate_enhanced_ai_diagnosis(df_summary, is_monthly=False):
+    """
+    升级版 AI 诊断引擎：涵盖过程影响分析、三维预警（引流/产能/跟进）、优缺点及下一步安排
+    """
     client = get_llm_client()
     time_tag = "月度" if is_monthly else "日度"
 
+    # 过滤掉“合计”行，转换纯数据 JSON
     df_filtered = df_summary[df_summary["员工姓名"] != "合计"].copy()
     summary_data_json = df_filtered.to_json(
         orient="records", force_ascii=False
@@ -509,6 +597,7 @@ def generate_enhanced_ai_diagnosis(df_summary, is_monthly=False):
 
 
 def render_full_ranking(df, col_name, title_name, unit=""):
+    """需求3优化：渲染边框更窄、留白更紧凑的排名卡片"""
     df_sorted = df.sort_values(by=col_name, ascending=False).reset_index(
         drop=True
     )
@@ -609,6 +698,7 @@ if page == "📱 员工端：手机填报与截图上传":
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("2️⃣ 上传平台截图")
 
+    # 需求1优化：使用动态 key 绑定的 file_uploader，上传成功后重置该 key 即可自动清空文件
     uploaded_file = st.file_uploader(
         "点击上传或手机拍照",
         type=["jpg", "png", "jpeg"],
@@ -628,25 +718,29 @@ if page == "📱 员工端：手机填报与截图上传":
             ):
                 ocr = mock_employee_ocr(image)
 
-            record_payload = {
-                "date": date_str,
-                "employee_name": emp_name,
-                "platform_version": platform_ver,
-                "i_looked": ocr["i_looked"],
-                "seen_me": ocr["seen_me"],
-                "i_greeted": ocr["i_greeted"],
-                "candidate_greeted": ocr["candidate_greeted"],
-                "i_communicated": ocr["i_communicated"],
-                "received_resumes": ocr["received_resumes"],
-                "exchanged_contact": ocr["exchanged_contact"],
-                "accepted_interview": ocr["accepted_interview"],
-            }
+            with sqlite3.connect(DB_PATH) as conn:
+                c = conn.cursor()
+                c.execute(
+                    """INSERT OR REPLACE INTO platform_data 
+                       (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, i_communicated, received_resumes, exchanged_contact, accepted_interview, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                    (
+                        date_str,
+                        emp_name,
+                        platform_ver,
+                        ocr["i_looked"],
+                        ocr["seen_me"],
+                        ocr["i_greeted"],
+                        ocr["candidate_greeted"],
+                        ocr["i_communicated"],
+                        ocr["received_resumes"],
+                        ocr["exchanged_contact"],
+                        ocr["accepted_interview"],
+                    ),
+                )
+                conn.commit()
 
-            # Supabase 唯一索引 upsert 插入/覆盖
-            supabase.table("platform_data").upsert(
-                record_payload, on_conflict="date, employee_name, platform_version"
-            ).execute()
-
+            # 需求1：提交成功后累加 uploader_key，促使图片框自动清空
             st.session_state.uploader_key += 1
 
             st.balloons()
@@ -658,28 +752,18 @@ if page == "📱 员工端：手机填报与截图上传":
 
     st.write("---")
     st.subheader("📜 个人历史数据上传记录与维护")
-    
-    res_p = supabase.table("platform_data").select("*").eq("employee_name", emp_name).order("id", desc=True).execute()
-    emp_records_df = pd.DataFrame(res_p.data)
+    with sqlite3.connect(DB_PATH) as conn:
+        emp_records_df = pd.read_sql_query(
+            """SELECT id as 记录编号, date as 数据日期, platform_version as 平台账号, 
+                      i_looked as 我看过, seen_me as 看过我, i_greeted as 我打招呼, candidate_greeted as 牛人新招呼,
+                      i_communicated as 我沟通, received_resumes as 收获简历, 
+                      exchanged_contact as 交换电话微信, accepted_interview as 接受面试, created_at as 提交时间 
+               FROM platform_data WHERE employee_name = ? ORDER BY id DESC""",
+            conn,
+            params=[emp_name],
+        )
 
     if not emp_records_df.empty:
-        rename_map = {
-            "id": "记录编号",
-            "date": "数据日期",
-            "platform_version": "平台账号",
-            "i_looked": "我看过",
-            "seen_me": "看过我",
-            "i_greeted": "我打招呼",
-            "candidate_greeted": "牛人新招呼",
-            "i_communicated": "我沟通",
-            "received_resumes": "收获简历",
-            "exchanged_contact": "交换电话微信",
-            "accepted_interview": "接受面试",
-            "created_at": "提交时间",
-        }
-        emp_records_df = emp_records_df.rename(columns=rename_map)
-        show_cols = list(rename_map.values())
-        emp_records_df = emp_records_df[[c for c in show_cols if c in emp_records_df.columns]]
         emp_records_df.index = range(1, len(emp_records_df) + 1)
         st.dataframe(emp_records_df, use_container_width=True)
 
@@ -699,7 +783,13 @@ if page == "📱 员工端：手机填报与截图上传":
             st.write("")
             st.write("")
             if st.button("🗑️ 删除选中的记录", type="primary"):
-                supabase.table("platform_data").delete().eq("id", record_to_del).execute()
+                with sqlite3.connect(DB_PATH) as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        "DELETE FROM platform_data WHERE id = ?",
+                        (record_to_del,),
+                    )
+                    conn.commit()
                 st.success(f"✅ 记录 #{record_to_del} 已成功删除！")
                 st.rerun()
     else:
@@ -730,13 +820,13 @@ elif page == "📊 业务预警与数据看板":
         month_str = f"{selected_year}-{selected_m_str.replace('月', '')}"
         date_filter_p = f"{month_str}%"
         date_filter_perf = f"{month_str}%"
-        current_time_tag = month_str
+        current_time_tag = month_str  # 用于导出的周期标识 (YYYY-MM)
     else:
         selected_date = col_date.date_input("选择统计日期", YESTERDAY)
         date_str = selected_date.strftime("%Y-%m-%d")
         date_filter_p = date_str
         date_filter_perf = date_str
-        current_time_tag = date_str
+        current_time_tag = date_str  # 用于导出的具体日期标识 (YYYY-MM-DD)
 
     if not is_admin:
         selected_employees = [st.session_state.real_name]
@@ -748,64 +838,53 @@ elif page == "📊 业务预警与数据看板":
             "筛选员工姓名", all_team_members, default=all_team_members
         )
 
-    # Supabase 查询逻辑替换
-    if "单月" in view_mode:
-        res_p = supabase.table("platform_data").select("*").like("date", date_filter_p).execute()
-        res_perf = supabase.table("performance_data").select("*").like("date", date_filter_perf).execute()
-    else:
-        res_p = supabase.table("platform_data").select("*").eq("date", date_filter_p).execute()
-        res_perf = supabase.table("performance_data").select("*").eq("date", date_filter_perf).execute()
-
-    df_p_raw = pd.DataFrame(res_p.data)
-    df_perf_raw = pd.DataFrame(res_perf.data)
-
-    if not df_p_raw.empty:
-        p_cols = ["i_looked", "seen_me", "i_greeted", "candidate_greeted", "i_communicated", "received_resumes", "exchanged_contact", "accepted_interview"]
-        for c in p_cols:
-            if c in df_p_raw.columns:
-                df_p_raw[c] = pd.to_numeric(df_p_raw[c], errors="coerce").fillna(0)
-        df_p = df_p_raw.groupby("employee_name", as_index=False)[p_cols].sum()
-        df_p = df_p.rename(columns={
-            "employee_name": "员工姓名",
-            "i_looked": "我看过", "seen_me": "看过我", "i_greeted": "我打招呼",
-            "candidate_greeted": "牛人新招呼", "i_communicated": "我沟通",
-            "received_resumes": "收获简历", "exchanged_contact": "交换电话微信",
-            "accepted_interview": "接受面试"
-        })
-    else:
-        df_p = pd.DataFrame(columns=["员工姓名", "我看过", "看过我", "我打招呼", "牛人新招呼", "我沟通", "收获简历", "交换电话微信", "接受面试"])
-
-    if not df_perf_raw.empty:
+    with sqlite3.connect(DB_PATH) as conn:
         if "单月" in view_mode:
-            perf_cols_map = {
-                "month_invites": "邀约数", "month_interviews": "到面数",
-                "month_inner_ft": "参培数(内单全职)", "month_inner_pt": "参培数(内单兼职)",
-                "month_outer_ft": "参培数(外单全职)", "month_outer_pt": "参培数(外单兼职)",
-                "month_trainees": "参培数"
-            }
-            for c in perf_cols_map.keys():
-                if c in df_perf_raw.columns:
-                    df_perf_raw[c] = pd.to_numeric(df_perf_raw[c], errors="coerce").fillna(0)
-            df_perf = df_perf_raw.groupby("employee_name", as_index=False)[list(perf_cols_map.keys())].max()
-            df_perf = df_perf.rename(columns={"employee_name": "员工姓名", **perf_cols_map})
+            df_p = pd.read_sql_query(
+                """SELECT employee_name as 员工姓名, SUM(i_looked) as 我看过, SUM(seen_me) as 看过我,
+                          SUM(i_greeted) as 我打招呼, SUM(candidate_greeted) as 牛人新招呼,
+                          SUM(i_communicated) as 我沟通, SUM(received_resumes) as 收获简历,
+                          SUM(exchanged_contact) as 交换电话微信, SUM(accepted_interview) as 接受面试
+                   FROM platform_data WHERE date LIKE ? GROUP BY employee_name""",
+                conn,
+                params=[date_filter_p],
+            )
+            df_perf = pd.read_sql_query(
+                """SELECT employee_name as 员工姓名, 
+                          MAX(month_invites) as 邀约数, MAX(month_interviews) as 到面数,
+                          MAX(month_inner_ft) as "参培数(内单全职)", MAX(month_inner_pt) as "参培数(内单兼职)",
+                          MAX(month_outer_ft) as "参培数(外单全职)", MAX(month_outer_pt) as "参培数(外单兼职)",
+                          MAX(month_trainees) as 参培数
+                   FROM performance_data WHERE date LIKE ? GROUP BY employee_name""",
+                conn,
+                params=[date_filter_perf],
+            )
         else:
-            perf_cols_map = {
-                "invites": "邀约数", "interviews": "到面数",
-                "inner_ft": "参培数(内单全职)", "inner_pt": "参培数(内单兼职)",
-                "outer_ft": "参培数(外单全职)", "outer_pt": "参培数(外单兼职)",
-                "trainees": "参培数"
-            }
-            for c in perf_cols_map.keys():
-                if c in df_perf_raw.columns:
-                    df_perf_raw[c] = pd.to_numeric(df_perf_raw[c], errors="coerce").fillna(0)
-            df_perf = df_perf_raw.groupby("employee_name", as_index=False)[list(perf_cols_map.keys())].sum()
-            df_perf = df_perf.rename(columns={"employee_name": "员工姓名", **perf_cols_map})
-    else:
-        df_perf = pd.DataFrame(columns=["员工姓名", "邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)", "参培数"])
+            df_p = pd.read_sql_query(
+                """SELECT employee_name as 员工姓名, SUM(i_looked) as 我看过, SUM(seen_me) as 看过我,
+                          SUM(i_greeted) as 我打招呼, SUM(candidate_greeted) as 牛人新招呼,
+                          SUM(i_communicated) as 我沟通, SUM(received_resumes) as 收获简历,
+                          SUM(exchanged_contact) as 交换电话微信, SUM(accepted_interview) as 接受面试
+                   FROM platform_data WHERE date = ? GROUP BY employee_name""",
+                conn,
+                params=[date_filter_p],
+            )
+            df_perf = pd.read_sql_query(
+                """SELECT employee_name as 员工姓名, 
+                          SUM(invites) as 邀约数, SUM(interviews) as 到面数,
+                          SUM(inner_ft) as "参培数(内单全职)", SUM(inner_pt) as "参培数(内单兼职)",
+                          SUM(outer_ft) as "参培数(外单全职)", SUM(outer_pt) as "参培数(外单兼职)",
+                          SUM(trainees) as 参培数
+                   FROM performance_data WHERE date = ? GROUP BY employee_name""",
+                conn,
+                params=[date_filter_perf],
+            )
 
     df_base = pd.DataFrame({"员工姓名": selected_employees})
     df_summary = pd.merge(df_base, df_p, on="员工姓名", how="left")
-    df_summary = pd.merge(df_summary, df_perf, on="员工姓名", how="left").fillna(0)
+    df_summary = pd.merge(df_summary, df_perf, on="员工姓名", how="left").fillna(
+        0
+    )
 
     df_summary["到面转化率数值"] = df_summary.apply(
         lambda r: (
@@ -817,8 +896,21 @@ elif page == "📊 业务预警与数据看板":
     )
 
     numeric_cols_to_sum = [
-        "我看过", "看过我", "我打招呼", "牛人新招呼", "我沟通", "收获简历", "交换电话微信", "接受面试",
-        "邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)", "参培数"
+        "我看过",
+        "看过我",
+        "我打招呼",
+        "牛人新招呼",
+        "我沟通",
+        "收获简历",
+        "交换电话微信",
+        "接受面试",
+        "邀约数",
+        "到面数",
+        "参培数(内单全职)",
+        "参培数(内单兼职)",
+        "参培数(外单全职)",
+        "参培数(外单兼职)",
+        "参培数",
     ]
 
     total_row = {"员工姓名": "合计"}
@@ -839,8 +931,23 @@ elif page == "📊 业务预警与数据看板":
     )
 
     final_cols = [
-        "员工姓名", "我看过", "看过我", "我打招呼", "牛人新招呼", "我沟通", "收获简历", "交换电话微信", "接受面试",
-        "邀约数", "到面数", "参培数(内单全职)", "参培数(内单兼职)", "参培数(外单全职)", "参培数(外单兼职)", "参培数", "到面转化率"
+        "员工姓名",
+        "我看过",
+        "看过我",
+        "我打招呼",
+        "牛人新招呼",
+        "我沟通",
+        "收获简历",
+        "交换电话微信",
+        "接受面试",
+        "邀约数",
+        "到面数",
+        "参培数(内单全职)",
+        "参培数(内单兼职)",
+        "参培数(外单全职)",
+        "参培数(外单兼职)",
+        "参培数",
+        "到面转化率",
     ]
 
     st.subheader(f"📋 招聘全链路汇总表 ({current_time_tag})")
@@ -853,6 +960,7 @@ elif page == "📊 业务预警与数据看板":
         use_container_width=True,
     )
 
+    # 需求2优化：在导出的 Dataframe 中注入时间字段（日报表显示具体日期，月报表显示周期月份）
     date_col_name = "周期月份" if "单月" in view_mode else "具体日期"
     df_export = df_display[final_cols].copy()
     df_export.insert(0, date_col_name, current_time_tag)
@@ -890,26 +998,40 @@ elif page == "📊 业务预警与数据看板":
             mime="text/csv",
         )
 
+    # ---------------------------------------------------------
+    # 📌 精简后的 9 大 KPI 团队排名面板
+    # ---------------------------------------------------------
     if is_admin and len(df_summary) > 1:
         st.write("---")
         st.subheader("📊 招聘关键过程与结果指标团队排名")
 
+        # 第一排：曝光与主动动作（3个）
         r1_col1, r1_col2, r1_col3 = st.columns(3)
         with r1_col1:
             render_full_ranking(df_summary, "看过我", "看过我人数", "人")
         with r1_col2:
-            render_full_ranking(df_summary, "我打招呼", "我打招呼次数", "次")
+            render_full_ranking(
+                df_summary, "我打招呼", "我打招呼次数", "次"
+            )
         with r1_col3:
-            render_full_ranking(df_summary, "牛人新招呼", "牛人新招呼数", "个")
+            render_full_ranking(
+                df_summary, "牛人新招呼", "牛人新招呼数", "个"
+            )
 
+        # 第二排：沟通与留存转化（3个）
         r2_col1, r2_col2, r2_col3 = st.columns(3)
         with r2_col1:
             render_full_ranking(df_summary, "我沟通", "我沟通人数", "人")
         with r2_col2:
-            render_full_ranking(df_summary, "交换电话微信", "交换电话微信数", "人")
+            render_full_ranking(
+                df_summary, "交换电话微信", "交换电话微信数", "人"
+            )
         with r2_col3:
-            render_full_ranking(df_summary, "收获简历", "收获简历数量", "份")
+            render_full_ranking(
+                df_summary, "收获简历", "收获简历数量", "份"
+            )
 
+        # 第三排：邀约与终局结果（3个）
         r3_col1, r3_col2, r3_col3 = st.columns(3)
         with r3_col1:
             render_full_ranking(df_summary, "邀约数", "新增邀约数", "人")
@@ -918,6 +1040,9 @@ elif page == "📊 业务预警与数据看板":
         with r3_col3:
             render_full_ranking(df_summary, "参培数", "参培数", "人")
 
+    # ---------------------------------------------------------
+    # 🤖 AI 大模型诊断与下一步优化安排模块
+    # ---------------------------------------------------------
     st.write("---")
     st.subheader("🤖 全链路数据诊断与下一步优化安排 (AI 引擎)")
 
@@ -1009,40 +1134,78 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
         )
 
         if st.button(f"💾 确认提交{img_type_label}数据入库"):
-            for idx, row in edited_df.iterrows():
-                emp = row["员工姓名"]
-                res_check = supabase.table("performance_data").select("id").eq("date", date_str).eq("employee_name", emp).execute()
-                
-                if "日度" in data_type:
-                    payload = {
-                        "date": date_str,
-                        "employee_name": emp,
-                        "invites": int(row["邀约数"]),
-                        "interviews": int(row["到面数"]),
-                        "inner_ft": int(row["参培数(内单全职)"]),
-                        "inner_pt": int(row["参培数(内单兼职)"]),
-                        "outer_ft": int(row["参培数(外单全职)"]),
-                        "outer_pt": int(row["参培数(外单兼职)"]),
-                        "trainees": int(row["参培数"]),
-                    }
-                else:
-                    payload = {
-                        "date": date_str,
-                        "employee_name": emp,
-                        "month_invites": int(row["邀约数"]),
-                        "month_interviews": int(row["到面数"]),
-                        "month_inner_ft": int(row["参培数(内单全职)"]),
-                        "month_inner_pt": int(row["参培数(内单兼职)"]),
-                        "month_outer_ft": int(row["参培数(外单全职)"]),
-                        "month_outer_pt": int(row["参培数(外单兼职)"]),
-                        "month_trainees": int(row["参培数"]),
-                    }
+            with sqlite3.connect(DB_PATH) as conn:
+                c = conn.cursor()
+                for idx, row in edited_df.iterrows():
+                    emp = row["员工姓名"]
+                    c.execute(
+                        "SELECT id FROM performance_data WHERE date = ? AND"
+                        " employee_name = ?",
+                        (date_str, emp),
+                    )
+                    exist = c.fetchone()
 
-                if res_check.data:
-                    supabase.table("performance_data").update(payload).eq("id", res_check.data[0]["id"]).execute()
-                else:
-                    supabase.table("performance_data").insert(payload).execute()
-
+                    if "日度" in data_type:
+                        if exist:
+                            c.execute(
+                                """UPDATE performance_data SET invites=?, interviews=?, inner_ft=?, inner_pt=?, outer_ft=?, outer_pt=?, trainees=? WHERE id=?""",
+                                (
+                                    int(row["邀约数"]),
+                                    int(row["到面数"]),
+                                    int(row["参培数(内单全职)"]),
+                                    int(row["参培数(内单兼职)"]),
+                                    int(row["参培数(外单全职)"]),
+                                    int(row["参培数(外单兼职)"]),
+                                    int(row["参培数"]),
+                                    exist[0],
+                                ),
+                            )
+                        else:
+                            c.execute(
+                                """INSERT INTO performance_data (date, employee_name, invites, interviews, inner_ft, inner_pt, outer_ft, outer_pt, trainees) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    date_str,
+                                    emp,
+                                    int(row["邀约数"]),
+                                    int(row["到面数"]),
+                                    int(row["参培数(内单全职)"]),
+                                    int(row["参培数(内单兼职)"]),
+                                    int(row["参培数(外单全职)"]),
+                                    int(row["参培数(外单兼职)"]),
+                                    int(row["参培数"]),
+                                ),
+                            )
+                    else:
+                        if exist:
+                            c.execute(
+                                """UPDATE performance_data SET month_invites=?, month_interviews=?, month_inner_ft=?, month_inner_pt=?, month_outer_ft=?, month_outer_pt=?, month_trainees=? WHERE id=?""",
+                                (
+                                    int(row["邀约数"]),
+                                    int(row["到面数"]),
+                                    int(row["参培数(内单全职)"]),
+                                    int(row["参培数(内单兼职)"]),
+                                    int(row["参培数(外单全职)"]),
+                                    int(row["参培数(外单兼职)"]),
+                                    int(row["参培数"]),
+                                    exist[0],
+                                ),
+                            )
+                        else:
+                            c.execute(
+                                """INSERT INTO performance_data (date, employee_name, month_invites, month_interviews, month_inner_ft, month_inner_pt, month_outer_ft, month_outer_pt, month_trainees) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                (
+                                    date_str,
+                                    emp,
+                                    int(row["邀约数"]),
+                                    int(row["到面数"]),
+                                    int(row["参培数(内单全职)"]),
+                                    int(row["参培数(内单兼职)"]),
+                                    int(row["参培数(外单全职)"]),
+                                    int(row["参培数(外单兼职)"]),
+                                    int(row["参培数"]),
+                                ),
+                            )
+                conn.commit()
             st.balloons()
             st.success(
                 f"🎉 成功更新覆盖 {date_str} 的{img_type_label}业绩数据！"
@@ -1051,25 +1214,16 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
 
     st.write("---")
     st.subheader("🔍 历史业绩数据查询与单条删除维护")
-    
-    res_perf_history = supabase.table("performance_data").select("*").order("id", desc=True).execute()
-    perf_records_df = pd.DataFrame(res_perf_history.data)
+    with sqlite3.connect(DB_PATH) as conn:
+        perf_records_df = pd.read_sql_query(
+            """SELECT id as 记录编号, date as 数据日期, employee_name as 员工姓名, 
+                      invites as 日邀约, interviews as 日到面, trainees as 日参培,
+                      month_invites as 月邀约, month_interviews as 月到面, month_trainees as 月参培
+               FROM performance_data ORDER BY id DESC""",
+            conn,
+        )
 
     if not perf_records_df.empty:
-        rename_map_p = {
-            "id": "记录编号",
-            "date": "数据日期",
-            "employee_name": "员工姓名",
-            "invites": "日邀约",
-            "interviews": "日到面",
-            "trainees": "日参培",
-            "month_invites": "月邀约",
-            "month_interviews": "月到面",
-            "month_trainees": "月参培",
-        }
-        perf_records_df = perf_records_df.rename(columns=rename_map_p)
-        show_p_cols = [c for c in rename_map_p.values() if c in perf_records_df.columns]
-        perf_records_df = perf_records_df[show_p_cols]
         perf_records_df.index = range(1, len(perf_records_df) + 1)
         st.dataframe(perf_records_df, use_container_width=True)
 
@@ -1089,7 +1243,13 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
             st.write("")
             st.write("")
             if st.button("🗑️ 删除选中记录", type="primary"):
-                supabase.table("performance_data").delete().eq("id", perf_id_to_del).execute()
+                with sqlite3.connect(DB_PATH) as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        "DELETE FROM performance_data WHERE id = ?",
+                        (perf_id_to_del,),
+                    )
+                    conn.commit()
                 st.success(f"✅ 业绩记录 #{perf_id_to_del} 已清除！")
                 st.rerun()
     else:
@@ -1116,34 +1276,34 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
         if col_u4.button("➕ 创建账号"):
             if new_username and new_realname and new_password:
                 try:
-                    supabase.table("users").insert({
-                        "username": new_username.strip(),
-                        "password": new_password.strip(),
-                        "real_name": new_realname.strip(),
-                        "role": "employee"
-                    }).execute()
-                    st.success(f"✅ 成功创建员工账号：{new_realname} ({new_username})")
+                    with sqlite3.connect(DB_PATH) as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "INSERT INTO users (username, password, real_name,"
+                            " role) VALUES (?, ?, ?, 'employee')",
+                            (new_username, new_password, new_realname),
+                        )
+                        conn.commit()
+                    st.success(
+                        f"✅ 成功创建员工账号：{new_realname} ({new_username})"
+                    )
                     st.rerun()
-                except Exception as e:
-                    st.error(f"❌ 创建失败，请检查账号是否唯一！({e})")
+                except sqlite3.IntegrityError:
+                    st.error("❌ 该登录账号已存在，请更换其他账号名！")
             else:
                 st.warning("⚠️ 请填满所有账号信息！")
 
         st.write("---")
 
         st.subheader("📋 现有人员与账号列表")
-        res_u = supabase.table("users").select("id, username, real_name, role, password").execute()
-        df_users = pd.DataFrame(res_u.data)
-        if not df_users.empty:
-            df_users = df_users.rename(columns={
-                "id": "用户编号",
-                "username": "账号",
-                "real_name": "姓名",
-                "role": "角色",
-                "password": "密码",
-            })
-            df_users.index = range(1, len(df_users) + 1)
-            st.dataframe(df_users, use_container_width=True)
+        with sqlite3.connect(DB_PATH) as conn:
+            df_users = pd.read_sql_query(
+                "SELECT id as 用户编号, username as 账号, real_name as 姓名, role"
+                " as 角色, password as 密码 FROM users",
+                conn,
+            )
+        df_users.index = range(1, len(df_users) + 1)
+        st.dataframe(df_users, use_container_width=True)
 
         st.write("---")
         st.subheader("✏️ 修改账号信息 / 重置密码")
@@ -1177,20 +1337,28 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
 
             if col_e4.button("💾 保存修改", type="primary"):
                 try:
-                    supabase.table("users").update({
-                        "username": edit_username.strip(),
-                        "real_name": edit_realname.strip(),
-                        "password": edit_password.strip()
-                    }).eq("id", edit_user_id).execute()
+                    with sqlite3.connect(DB_PATH) as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "UPDATE users SET username = ?, real_name = ?,"
+                            " password = ? WHERE id = ?",
+                            (
+                                edit_username,
+                                edit_realname,
+                                edit_password,
+                                edit_user_id,
+                            ),
+                        )
+                        conn.commit()
                     st.success("✅ 账号信息更新成功！")
                     st.rerun()
-                except Exception as e:
-                    st.error(f"❌ 更改失败，请检查是否账号名冲突: {e}")
+                except sqlite3.IntegrityError:
+                    st.error("❌ 更改后的登录账号与已有其他账号冲突！")
 
         st.write("---")
         st.subheader("🗑️ 删除员工账号")
         col_del_u, col_del_ubtn = st.columns([2, 1])
-        user_list = df_users[df_users["角色"] != "admin"] if not df_users.empty else pd.DataFrame()
+        user_list = df_users[df_users["角色"] != "admin"]
 
         if not user_list.empty:
             del_user_id = col_del_u.selectbox(
@@ -1204,23 +1372,28 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                 ),
             )
             if col_del_ubtn.button("🔥 确认删除账号", type="primary"):
-                supabase.table("users").delete().eq("id", del_user_id).execute()
+                with sqlite3.connect(DB_PATH) as conn:
+                    c = conn.cursor()
+                    c.execute(
+                        "DELETE FROM users WHERE id = ?", (del_user_id,)
+                    )
+                    conn.commit()
                 st.success("✅ 账号删除成功！")
                 st.rerun()
 
     with tab2:
         st.subheader("📋 所有平台上传记录维护")
-        res_rec = supabase.table("platform_data").select("*").order("id", desc=True).execute()
-        df_records = pd.DataFrame(res_rec.data)
+        with sqlite3.connect(DB_PATH) as conn:
+            df_records = pd.read_sql_query(
+                """SELECT id as 记录编号, date as 归属日期, employee_name as 员工姓名, platform_version as 平台账号,
+                          i_looked as 我看过, seen_me as 看过我, i_greeted as 我打招呼, candidate_greeted as 牛人新招呼,
+                          i_communicated as 我沟通, received_resumes as 收到简历,
+                          exchanged_contact as 交换电话微信, accepted_interview as 接受面试, created_at as 更新时间
+                   FROM platform_data ORDER BY id DESC""",
+                conn,
+            )
 
         if not df_records.empty:
-            df_records = df_records.rename(columns={
-                "id": "记录编号", "date": "归属日期", "employee_name": "员工姓名", "platform_version": "平台账号",
-                "i_looked": "我看过", "seen_me": "看过我", "i_greeted": "我打招呼", "candidate_greeted": "牛人新招呼",
-                "i_communicated": "我沟通", "received_resumes": "收到简历",
-                "exchanged_contact": "交换电话微信", "accepted_interview": "接受面试", "created_at": "更新时间"
-            })
-
             col_f1, col_f2 = st.columns(2)
             filter_name = col_f1.selectbox(
                 "按员工筛选记录", ["全部"] + all_team_members
@@ -1252,7 +1425,13 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                     ),
                 )
                 if col_del_btn.button("🔥 确认删除记录", type="primary"):
-                    supabase.table("platform_data").delete().eq("id", selected_id).execute()
+                    with sqlite3.connect(DB_PATH) as conn:
+                        c = conn.cursor()
+                        c.execute(
+                            "DELETE FROM platform_data WHERE id = ?",
+                            (selected_id,),
+                        )
+                        conn.commit()
                     st.success(f"✅ 记录 #{selected_id} 已彻底删除！")
                     st.rerun()
         else:
