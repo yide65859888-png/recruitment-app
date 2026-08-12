@@ -1,11 +1,10 @@
-import sqlite3
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import datetime
 import io
 import json
 import re
-import psycopg2
+import sqlite3
 from openai import OpenAI
 import pandas as pd
 from PIL import Image
@@ -517,27 +516,56 @@ def check_existing_record(date_str, emp_name, platform):
         return res[0] if res else None
 
 
-def _call_llm_diagnosis(
-    name, level, time_tag, data_str, metrics_summary, reason_fallback, action_fallback
-):
-    """单条大模型诊断调用函数"""
+def generate_enhanced_ai_diagnosis(df_summary, is_monthly=False):
+    """
+    升级版 AI 诊断引擎：涵盖过程影响分析、三维预警（引流/产能/跟进）、优缺点及下一步安排
+    """
     client = get_llm_client()
+    time_tag = "月度" if is_monthly else "日度"
+
+    # 过滤掉“合计”行，转换纯数据 JSON
+    df_filtered = df_summary[df_summary["员工姓名"] != "合计"].copy()
+    summary_data_json = df_filtered.to_json(
+        orient="records", force_ascii=False
+    )
+
     prompt = f"""
-你是一位资深招聘效能专家。请根据以下招聘人员的过程数据做精准卡点归因诊断与改进建议。
+你是一位资深招聘效能专家与数据分析师。请根据以下员工的【{time_tag}】招聘全链路过程与结果数据进行深度诊断分析。
 
-【员工姓名】：{name}
-【统计时间维度】：{time_tag}
-【预警类别】：{level}
-【过程漏斗关键数据】：{metrics_summary}
+【全员招聘数据】：
+{summary_data_json}
 
-【要求】：
-1. 深入分析卡点原因（归因诊断）：分析为什么会产生该卡点，用语专业、切中要害。
-2. 给出落地的建议动作：给招聘专员提供 1-2 条明确、可操作的业务动作指导。
-3. 必须输出严格的 JSON 结构，不能有任何 markdown 标签，格式如下：
-{{
-    "reason": "你的归因诊断内容",
-    "action": "你的建议动作内容"
-}}
+【分析任务要求】：
+请针对表格中的每一位招聘专员，从以下三个维度进行分析，并输出严格的 JSON 格式数据：
+
+1. **过程数据对结果数的影响分析**：
+   - 评估该员工的平台使用数据（我看过、我打招呼、我沟通、交换微信/简历）对其最终【邀约数】、【到面数】、【参培数】的核心影响点。
+2. **个人优缺点与三大预警诊断**：
+   - **优点**：分析其表现突出的过程或结果指标。
+   - **缺点/卡点**：分析其转化率较低或漏斗断层的地方。
+   - **引流预警（平台流量异常）**：分析其“看过我”、“牛人新招呼”或“我打招呼”是否偏低或回复率异常。
+   - **产能预警（实际参训数）**：评估其实际参培数是否达标（月度<3人或日度=0为预警）。
+   - **跟进预警（私域与邀约）**：评估“交换微信/简历”后未能转化为“邀约数”或“到面数”的跟进滞后问题。
+3. **下一步具体优化安排**：
+   - 给出 2-3 条极具操作性的落地改进计划（如：调整招呼话术、提高私域 2 小时跟进率、优化匹配画像等）。
+
+【输出格式要求】：
+必须且只能输出严格的 JSON 数组，格式如下（严禁包含 markdown 标记或多余文字）：
+[
+  {{
+    "name": "员工姓名",
+    "influence_analysis": "平台数据（如打招呼偏低）直接限制了私域获取，进而导致邀约基数不足...",
+    "pros": "主动沟通量高，私域留存率表现优秀",
+    "cons": "私域到邀约转化率偏低，到面参培率有待提升",
+    "traffic_alert": "正常 / ⚠️ 流量预警：曝光量及牛人主动招呼量显著低于团队均值",
+    "capacity_alert": "正常 / 🚨 产能预警：本期参培人数为0，产出严重不足",
+    "followup_alert": "正常 / ⚠️ 跟进预警：已留存微信15人但仅邀约2人，跟进闭环存在滞后",
+    "next_steps": [
+      "1. 针对留存微信未邀约人员，在24小时内进行电话二次复核；",
+      "2. 重新梳理招呼话术，提升打招呼到沟通的转化率。"
+    ]
+  }}
+]
 """
     try:
         response = client.chat.completions.create(
@@ -545,13 +573,14 @@ def _call_llm_diagnosis(
             messages=[
                 {
                     "role": "system",
-                    "content": "你是一个专业的 HR 数据效能分析助手。",
+                    "content": "你是一个专业的 HR 数据效能分析与团队管理专家。",
                 },
                 {"role": "user", "content": prompt},
             ],
-            temperature=0.3,
-            max_tokens=300,
+            temperature=0.2,
+            extra_body={"enable_thinking": QWEN_CONFIG["enable_thinking"]},
         )
+
         res_text = response.choices[0].message.content.strip()
         if res_text.startswith("```"):
             lines = res_text.split("\n")
@@ -561,162 +590,10 @@ def _call_llm_diagnosis(
                 lines = lines[:-1]
             res_text = "\n".join(lines).strip()
 
-        parsed = json.loads(res_text)
-        return parsed.get("reason", reason_fallback), parsed.get(
-            "action", action_fallback
-        )
-    except Exception:
-        return reason_fallback, action_fallback
-
-
-def run_alert_engine(df_summary, is_monthly=False):
-    """智能预警引擎：条件匹配后并发调用大模型进行实时归因诊断"""
-    tasks = []
-    time_tag = "全月" if is_monthly else "当日"
-
-    for _, row in df_summary.iterrows():
-        name = row["员工姓名"]
-        if name == "合计":
-            continue
-        comm = int(row.get("我沟通", 0))
-        resumes = int(row.get("收获简历", 0))
-        wx = int(row.get("交换电话微信", 0))
-        invites = int(row.get("邀约数", 0))
-        interviews = int(row.get("到面数", 0))
-        trainees = int(row.get("参培数", 0))
-
-        metrics_summary = f"主动沟通:{comm}人, 收获简历:{resumes}份, 私域留存(微信电话):{wx}个, 邀约:{invites}人, 到面:{interviews}人, 参培:{trainees}人"
-
-        if is_monthly and invites < 30:
-            tasks.append({
-                "name": name,
-                "level": "🚨 产能预警：月度招聘产能严重不足",
-                "issue": f"{time_tag}累计邀约仅 {invites} 人，到面 {interviews} 人",
-                "data": (
-                    f"月邀约 {invites} 人 ➔ 到面 {interviews} 人 ➔ 参培"
-                    f" {trainees} 人"
-                ),
-                "metrics_summary": metrics_summary,
-                "time_tag": time_tag,
-                "reason_fallback": (
-                    "月度整体招聘动作极少，业务活动量严重不达标，未能建立起有效的招聘漏斗基数"
-                ),
-                "action_fallback": (
-                    "建议拉通一对一辅导，明确每日打招呼、私域跟进与约面的最低过程"
-                    " KPI"
-                ),
-            })
-
-        if comm > 100 and (resumes + wx) < 30:
-            tasks.append({
-                "name": name,
-                "level": "🚨 触达预警：开场白与画像匹配度待优化",
-                "issue": (
-                    f"{time_tag}主动沟通 {comm} 人，但私域仅获取 {wx} 个联系方式"
-                ),
-                "data": f"沟通 {comm} 人 ➔ 电话/微信仅 {wx} 人",
-                "metrics_summary": metrics_summary,
-                "time_tag": time_tag,
-                "reason_fallback": (
-                    "打招呼量较大但私域留存偏低，可能存在推送职位与求职者意向不匹配"
-                ),
-                "action_fallback": (
-                    "建议抽查交流话术，优化精准画像筛选，提升有效沟通率"
-                ),
-            })
-
-        min_invites = 5 if is_monthly else 1
-        if wx >= 10 and invites < min_invites:
-            tasks.append({
-                "name": name,
-                "level": "⚠️ 跟进预警：私域候选人转化滞后",
-                "issue": (
-                    f"{time_tag}获取电话微信 {wx} 个，但实际邀约仅 {invites} 人"
-                ),
-                "data": f"电话微信 {wx} 人 ➔ 邀约 {invites} 人",
-                "metrics_summary": metrics_summary,
-                "time_tag": time_tag,
-                "reason_fallback": (
-                    "私域留存资源较丰富但尚未形成有效约面，可能存在跟进及时性不足"
-                ),
-                "action_fallback": (
-                    "建议梳理私域待跟进列表，通过电话复核提高直接邀约率"
-                ),
-            })
-
-        trainee_rate = (
-            (trainees / interviews * 100) if interviews > 0 else 0.0
-        )
-        if interviews >= (15 if is_monthly else 20) and (
-            trainees == 0 or trainee_rate < 10.0
-        ):
-            tasks.append({
-                "name": name,
-                "level": "🚨 转化预警：到面至参培漏斗断层",
-                "issue": (
-                    f"{time_tag}到面 {interviews} 人，但参培仅 {trainees} 人"
-                    f" (转化率仅 {trainee_rate:.1f}%)"
-                ),
-                "data": f"到面 {interviews} 人 ➔ 参培仅 {trainees} 人",
-                "metrics_summary": metrics_summary,
-                "time_tag": time_tag,
-                "reason_fallback": (
-                    "到场人数较多但后续参培流失率极高，可能存在前期求职意向确认不足"
-                ),
-                "action_fallback": (
-                    "建议加强现场面试反馈复盘，提高前期邀约精准度"
-                ),
-            })
-
-        if invites > 0 and interviews >= (invites * 2):
-            tasks.append({
-                "name": name,
-                "level": "🛠️ 规范预警：过程数据同步延迟",
-                "issue": (
-                    f"{time_tag}到面数({interviews}) 显著高于"
-                    f" 邀约记录数({invites})"
-                ),
-                "data": (
-                    "到面转化率异常达到"
-                    f" {((interviews/invites)*100):.1f}%"
-                ),
-                "metrics_summary": metrics_summary,
-                "time_tag": time_tag,
-                "reason_fallback": (
-                    "可能存在事前邀约数据录入不及时、求职者到场后才集中补录的情况"
-                ),
-                "action_fallback": (
-                    "建议规范“事前录入邀约、事后核到面”的数据更新节奏"
-                ),
-            })
-
-    if not tasks:
+        return json.loads(res_text)
+    except Exception as e:
+        st.error(f"⚠️ AI 诊断分析生成波动: {e}")
         return []
-
-    # 使用多线程并发请求大模型分析，大幅缩短生成时间
-    alerts = []
-    with ThreadPoolExecutor(max_workers=min(len(tasks), 5)) as executor:
-        futures = [
-            executor.submit(
-                _call_llm_diagnosis,
-                t["name"],
-                t["level"],
-                t["time_tag"],
-                t["data"],
-                t["metrics_summary"],
-                t["reason_fallback"],
-                t["action_fallback"],
-            )
-            for t in tasks
-        ]
-
-        for t, future in zip(tasks, futures):
-            reason, action = future.result()
-            t["reason"] = reason
-            t["action"] = action
-            alerts.append(t)
-
-    return alerts
 
 
 def render_full_ranking(df, col_name, title_name, unit=""):
@@ -821,7 +698,6 @@ if page == "📱 员工端：手机填报与截图上传":
     st.markdown("<div class='mobile-card'>", unsafe_allow_html=True)
     st.subheader("2️⃣ 上传平台截图")
 
-    # 需求1优化：使用动态 key 绑定的 file_uploader，上传成功后重置该 key 即可自动清空文件
     uploaded_file = st.file_uploader(
         "点击上传或手机拍照",
         type=["jpg", "png", "jpeg"],
@@ -863,7 +739,6 @@ if page == "📱 员工端：手机填报与截图上传":
                 )
                 conn.commit()
 
-            # 需求1：提交成功后累加 uploader_key，促使图片框自动清空
             st.session_state.uploader_key += 1
 
             st.balloons()
@@ -919,9 +794,9 @@ if page == "📱 员工端：手机填报与截图上传":
         st.info("ℹ️ 暂无历史上传记录。")
 
 # ---------------------------------------------------------
-# 模块二：数据看板（包含最新 9 大 KPI 指标排名区与 AI 深度诊断）
+# 模块二：数据看板
 # ---------------------------------------------------------
-elif page == "📊 业务预警与数据看板":
+if page == "📊 业务预警与数据看板":
     st.markdown(
         "<div class='main-header'>📊 招聘全链路过程数据监控看板</div>",
         unsafe_allow_html=True,
@@ -943,13 +818,13 @@ elif page == "📊 业务预警与数据看板":
         month_str = f"{selected_year}-{selected_m_str.replace('月', '')}"
         date_filter_p = f"{month_str}%"
         date_filter_perf = f"{month_str}%"
-        current_time_tag = month_str  # 用于导出的周期标识 (YYYY-MM)
+        current_time_tag = month_str
     else:
         selected_date = col_date.date_input("选择统计日期", YESTERDAY)
         date_str = selected_date.strftime("%Y-%m-%d")
         date_filter_p = date_str
         date_filter_perf = date_str
-        current_time_tag = date_str  # 用于导出的具体日期标识 (YYYY-MM-DD)
+        current_time_tag = date_str
 
     if not is_admin:
         selected_employees = [st.session_state.real_name]
@@ -1049,12 +924,10 @@ elif page == "📊 业务预警与数据看板":
     df_display = pd.concat(
         [df_summary, pd.DataFrame([total_row])], ignore_index=True
     )
-if "到面转化率数值" in df_display.columns:
-    df_display["到面转化率"] = df_display["到面转化率数值"].fillna(0).apply(lambda x: f"{x:.1f}%")
-else:
-    df_display["到面转化率"] = df_display.apply(
-        lambda r: f"{round((r.get('到面数', 0) / r.get('邀约数', 1) * 100), 1)}%" if r.get('邀约数', 0) > 0 else "0.0%", 
-        axis=1)
+    df_display["到面转化率"] = df_display["到面转化率数值"].apply(
+        lambda x: f"{x:.1f}%"
+    )
+
     final_cols = [
         "员工姓名",
         "我看过",
@@ -1085,7 +958,6 @@ else:
         use_container_width=True,
     )
 
-    # 需求2优化：在导出的 Dataframe 中注入时间字段（日报表显示具体日期，月报表显示周期月份）
     date_col_name = "周期月份" if "单月" in view_mode else "具体日期"
     df_export = df_display[final_cols].copy()
     df_export.insert(0, date_col_name, current_time_tag)
@@ -1123,14 +995,11 @@ else:
             mime="text/csv",
         )
 
-    # ---------------------------------------------------------
-    # 📌 精简后的 9 大 KPI 团队排名面板
-    # ---------------------------------------------------------
+    # 精简后的 9 大 KPI 团队排名面板
     if is_admin and len(df_summary) > 1:
         st.write("---")
         st.subheader("📊 招聘关键过程与结果指标团队排名")
 
-        # 第一排：曝光与主动动作（3个）
         r1_col1, r1_col2, r1_col3 = st.columns(3)
         with r1_col1:
             render_full_ranking(df_summary, "看过我", "看过我人数", "人")
@@ -1143,7 +1012,6 @@ else:
                 df_summary, "牛人新招呼", "牛人新招呼数", "个"
             )
 
-        # 第二排：沟通与留存转化（3个）
         r2_col1, r2_col2, r2_col3 = st.columns(3)
         with r2_col1:
             render_full_ranking(df_summary, "我沟通", "我沟通人数", "人")
@@ -1156,7 +1024,6 @@ else:
                 df_summary, "收获简历", "收获简历数量", "份"
             )
 
-        # 第三排：邀约与终局结果（3个）
         r3_col1, r3_col2, r3_col3 = st.columns(3)
         with r3_col1:
             render_full_ranking(df_summary, "邀约数", "新增邀约数", "人")
@@ -1165,40 +1032,61 @@ else:
         with r3_col3:
             render_full_ranking(df_summary, "参培数", "参培数", "人")
 
+    # AI 大模型诊断与下一步优化安排模块
     st.write("---")
-    st.subheader("🤖 智能过程漏斗卡点诊断与预警 (AI 大模型引擎)")
+    st.subheader("🤖 全链路数据诊断与下一步优化安排 (AI 引擎)")
 
-    with st.spinner("🤖 通义千问大模型正在分析招聘过程漏斗，撰写归因诊断与改进建议..."):
-        alerts = run_alert_engine(
+    with st.spinner(
+        "🤖 通义千问大模型正在进行平台影响分析、三大预警诊断与下一步排期..."
+    ):
+        analysis_results = generate_enhanced_ai_diagnosis(
             df_summary, is_monthly=("单月" in view_mode)
         )
 
-    if alerts:
-        for a in alerts:
-            card_class = (
-                "alert-card-danger"
-                if "🚨" in a["level"]
-                else "alert-card-warning"
-            )
-            st.markdown(
-                f"<div class='{card_class}'><b>【{a['level']}】{a['name']} -"
-                f" {a['issue']}</b><br/>• <b>卡点数据：</b>"
-                f" {a['data']}<br/>• <b>AI 归因诊断：</b>"
-                f" {a['reason']}<br/>• <b>AI 建议动作：</b>"
-                f" {a['action']}</div>",
-                unsafe_allow_html=True,
-           )
-            st.success("🎉 全员数据表现正常，暂无过程卡点预警！")
+    if analysis_results:
+        for item in analysis_results:
+            with st.expander(
+                f"👤 **{item['name']}** 的深度效能诊断与优化排期",
+                expanded=True,
+            ):
+                col_a, col_b = st.columns([1.2, 1])
 
-    # --------------------------------------------------
-    # 模块三：数据端
-    # --------------------------------------------------
-    if page == "📋 数据端：智能识图/录入业绩" and is_admin:
-        st.markdown(
-            "<div class='main-header'>📋 数据端：部门业绩汇总与智能识图录入"
-            " (管理员专用)</div>",
-            unsafe_allow_html=True,
-        )
+                with col_a:
+                    st.markdown(
+                        "**📌 过程数据对结果影响：**\n"
+                        f"{item['influence_analysis']}"
+                    )
+                    st.markdown(f"**👍 个人优势：** {item['pros']}")
+                    st.markdown(f"**⚠️ 薄弱环节：** {item['cons']}")
+
+                with col_b:
+                    st.markdown("**🚨 三维诊断预警：**")
+                    st.caption(
+                        f"• **引流预警（平台流量）：** {item['traffic_alert']}"
+                    )
+                    st.caption(
+                        f"• **跟进预警（转化闭环）：** {item['followup_alert']}"
+                    )
+                    st.caption(
+                        f"• **产能预警（实际参培）：** {item['capacity_alert']}"
+                    )
+
+                st.markdown("---")
+                st.markdown("**🎯 下一步具体优化安排：**")
+                for step in item.get("next_steps", []):
+                    st.markdown(f"- {step}")
+    else:
+        st.info("ℹ️ 暂无诊断数据，请检查数据提交情况。")
+
+# ---------------------------------------------------------
+# 模块三：数据端
+# ---------------------------------------------------------
+if page == "📋 数据端：智能识图/录入业绩" and is_admin:
+    st.markdown(
+        "<div class='main-header'>📋 数据端：部门业绩汇总与智能识图录入"
+        " (管理员专用)</div>",
+        unsafe_allow_html=True,
+    )
     col_type, col_date = st.columns(2)
     data_type = col_type.radio(
         "📌 选择上传的数据表类型：",
@@ -1360,7 +1248,7 @@ else:
 # ---------------------------------------------------------
 # 模块四：管理端
 # ---------------------------------------------------------
-elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
+if page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
     st.markdown(
         "<div class='main-header'>⚙️ 后台管理中心 (管理员权限)</div>",
         unsafe_allow_html=True,
@@ -1538,120 +1426,3 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                     st.rerun()
         else:
             st.info("ℹ️ 暂无平台提交记录。")
-     # ==========================================
-# 独立模块：历史数据批量恢复/导入（全字段无损抓取版）
-# ==========================================
-st.sidebar.markdown("---")
-if st.sidebar.checkbox("📁 展开历史数据导入工具"):
-    st.header("📁 历史日报表恢复与全字段批量导入")
-    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并全字段覆盖保存。")
-    
-    import_date = st.date_input("选择历史数据归属日期", datetime.date.today(), key="batch_import_date")
-    uploaded_file = st.file_uploader("选择之前导出的日报表文件", type=["xlsx", "csv"], key="batch_import_file")
-    
-    if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith(".csv"):
-                import_df = pd.read_csv(uploaded_file)
-            else:
-                import_df = pd.read_excel(uploaded_file)
-                
-            st.write("📖 **读取到的数据预览：**")
-            st.dataframe(import_df.head(10), use_container_width=True)
-            
-            # 1. 覆盖表格中出现的所有字段映射（包含前段沟通、中段邀约、后段参培）
-            col_map = {
-                "具体日期": "date",
-                "日期": "date",
-                "员工姓名": "employee_name",
-                "姓名": "employee_name",
-                "平台版本": "platform_version",
-                "我看过": "i_looked",
-                "看过我": "seen_me",
-                "看过我(次)": "seen_me",
-                "我打招呼": "i_greeted",
-                "牛人新招呼": "candidate_greeted",
-                "牛人招呼": "candidate_greeted",
-                "我沟通": "i_communicated",
-                "沟通人数": "i_communicated",
-                "收获简历": "received_resumes",
-                "收到简历": "received_resumes",
-                "交换电话微信": "exchanged_contact",
-                "获取联系": "exchanged_contact",
-                "接受面试": "accepted_interview",
-                "邀约数": "invited",
-                "到面数": "interviewed",
-                "参培数(内单全职)": "trained_fulltime",
-                "参培数(内单兼职)": "trained_parttime",
-                "参培数(外单全职)": "trained_out_fulltime",
-                "参培数(外单兼职)": "trained_out_parttime",
-                "参培数": "trained_total",
-                "到面转化率": "interview_conversion_rate"
-            }
-            
-            if st.button("🚀 确认全字段导入并覆盖保存", use_container_width=True, key="btn_confirm_import"):
-                # 清理表头空格
-                import_df.columns = [str(c).strip() for c in import_df.columns]
-                valid_cols = [c for c in import_df.columns if c in col_map]
-                
-                if not valid_cols:
-                    st.error("无法识别列名，请确认上传的文件包含标准的招聘表头。")
-                else:
-                    ready_df = import_df[valid_cols].rename(columns=col_map)
-                    ready_df['date'] = str(import_date)
-                    if 'platform_version' not in ready_df.columns:
-                        ready_df['platform_version'] = "综合"
-                        
-                    ready_df = ready_df.fillna(0)
-                    if 'employee_name' in ready_df.columns:
-                        ready_df = ready_df[~ready_df['employee_name'].astype(str).str.contains('合计|总计|NaN')]
-                    
-                    records = ready_df.to_dict(orient='records')
-                    
-                    # 写入 SQLite 数据库（单表全字段覆盖模式）
-                    with sqlite3.connect(DB_PATH) as conn:
-                        c = conn.cursor()
-                        
-                        # 自动为 platform_data 补充缺少的所有字段（保证不漏抓）
-                        db_cols = [col[1] for col in c.execute("PRAGMA table_info(platform_data)").fetchall()]
-                        needed_cols = [
-                            "i_looked", "seen_me", "i_greeted", "candidate_greeted", "i_communicated", 
-                            "received_resumes", "exchanged_contact", "accepted_interview",
-                            "invited", "interviewed", "trained_fulltime", "trained_parttime", 
-                            "trained_out_fulltime", "trained_out_parttime", "trained_total"
-                        ]
-                        for col in needed_cols:
-                            if col not in db_cols:
-                                try:
-                                    c.execute(f"ALTER TABLE platform_data ADD COLUMN {col} INTEGER DEFAULT 0")
-                                except Exception:
-                                    pass
-                        
-                        # 1. 删除当前日期旧数据
-                        c.execute("DELETE FROM platform_data WHERE date = ?", (str(import_date),))
-
-                        # 2. 全字段一次性写入主表
-                        for r in records:
-                            c.execute("""
-                                INSERT INTO platform_data 
-                                (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, 
-                                 i_communicated, received_resumes, exchanged_contact, accepted_interview,
-                                 invited, interviewed, trained_fulltime, trained_parttime, trained_out_fulltime, trained_out_parttime, trained_total)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, (
-                                r.get('date'), r.get('employee_name'), r.get('platform_version', '综合'),
-                                int(float(r.get('i_looked', 0))), int(float(r.get('seen_me', 0))), int(float(r.get('i_greeted', 0))),
-                                int(float(r.get('candidate_greeted', 0))), int(float(r.get('i_communicated', 0))),
-                                int(float(r.get('received_resumes', 0))), int(float(r.get('exchanged_contact', 0))),
-                                int(float(r.get('accepted_interview', 0))),
-                                int(float(r.get('invited', 0))), int(float(r.get('interviewed', 0))),
-                                int(float(r.get('trained_fulltime', 0))), int(float(r.get('trained_parttime', 0))),
-                                int(float(r.get('trained_out_fulltime', 0))), int(float(r.get('trained_out_parttime', 0))),
-                                int(float(r.get('trained_total', 0)))
-                            ))
-                                
-                        conn.commit()
-                    st.success(f"🎉 成功识别并精准导入了 {len(records)} 条数据的全部列字段！")
-                    st.balloons()
-        except Exception as e:
-            st.error(f"解析文件失败: {e}")
