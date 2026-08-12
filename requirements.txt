@@ -4,3 +4,5 @@ pillow
 qrcode
 openai
 openpyxl
+psycopg2-binary
+sqlalchemy
