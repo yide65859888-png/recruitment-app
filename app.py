@@ -4,7 +4,7 @@ import datetime
 import io
 import json
 import re
-import sqlite3
+import psycopg2
 from openai import OpenAI
 import pandas as pd
 from PIL import Image
@@ -1536,3 +1536,68 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                     st.rerun()
         else:
             st.info("ℹ️ 暂无平台提交记录。")
+            # ==========================================
+# 独立模块：历史数据批量恢复/导入
+# ==========================================
+st.sidebar.markdown("---")
+if st.sidebar.checkbox("📁 展开历史数据导入工具"):
+    st.header("📁 历史日报表恢复与批量导入")
+    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并保存到云数据库。")
+    
+    import_date = st.date_input("选择历史数据归属日期", datetime.date.today(), key="batch_import_date")
+    uploaded_file = st.file_uploader("选择之前导出的日报表文件", type=["xlsx", "csv"], key="batch_import_file")
+    
+    if uploaded_file is not None:
+        try:
+            if uploaded_file.name.endswith(".csv"):
+                import_df = pd.read_csv(uploaded_file)
+            else:
+                import_df = pd.read_excel(uploaded_file)
+                
+            st.write("📖 **读取到的数据预览：**")
+            st.dataframe(import_df.head(10), use_container_width=True)
+            
+            # 列名映射
+            col_map = {
+                "员工姓名": "employee_name",
+                "平台版本": "platform_version",
+                "看过我": "i_looked",
+                "看过我(次)": "seen_me",
+                "我打招呼": "i_greeted",
+                "牛人招呼": "candidate_greeted",
+                "沟通人数": "i_communicated",
+                "收到简历": "received_resumes",
+                "获取联系": "exchanged_contact",
+                "接受面试": "accepted_interview"
+            }
+            
+            if st.button("🚀 确认导入并保存", use_container_width=True, key="btn_confirm_import"):
+                valid_cols = [c for c in import_df.columns if c in col_map]
+                if not valid_cols:
+                    st.error("无法识别列名，请上传从系统导出的日报表。")
+                else:
+                    ready_df = import_df[valid_cols].rename(columns=col_map)
+                    ready_df['date'] = str(import_date)
+                    if 'platform_version' not in ready_df.columns:
+                        ready_df['platform_version'] = "综合"
+                        
+                    ready_df = ready_df.fillna(0)
+                    if 'employee_name' in ready_df.columns:
+                        ready_df = ready_df[~ready_df['employee_name'].astype(str).str.contains('合计|总计|NaN')]
+                    
+                    records = ready_df.to_dict(orient='records')
+                    int_cols = ["i_looked", "seen_me", "i_greeted", "candidate_greeted", "i_communicated", "received_resumes", "exchanged_contact", "accepted_interview"]
+                    for r in records:
+                        for ic in int_cols:
+                            if ic in r:
+                                try:
+                                    r[ic] = int(r[ic])
+                                except:
+                                    r[ic] = 0
+                                    
+                    # 写入 Supabase 数据库
+                    supabase.table("platform_data").upsert(records, on_conflict="date,employee_name,platform_version").execute()
+                    st.success(f"🎉 成功导入 {len(records)} 条历史记录！")
+                    st.balloons()
+        except Exception as e:
+            st.error(f"解析文件失败: {e}")
