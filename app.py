@@ -997,7 +997,7 @@ elif page == "📊 业务预警与数据看板":
             render_full_ranking(
                 df_summary, "我打招呼", "我打招呼次数", "次"
             )
-        with r3_col3:
+        with r1_col3:
             render_full_ranking(
                 df_summary, "牛人新招呼", "牛人新招呼数", "个"
             )
