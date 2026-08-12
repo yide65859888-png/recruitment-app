@@ -180,7 +180,7 @@ if "📱 员工端" in module:
       conn.close()
 
 # ==========================================
-# 模块二：业务预警与数据看板（完整恢复）
+# 模块二：业务预警与数据看板（完整原样恢复）
 # ==========================================
 elif "📊 业务预警" in module:
   st.subheader("📊 业务预警与数据看板")
@@ -192,7 +192,7 @@ elif "📊 业务预警" in module:
 
   if df_all.empty:
     st.warning(
-        "⚠️ 当前数据库暂无任何业绩数据。请前往【📦 历史数据导入与恢复】板块上传您之前导出的日报表进行恢复！"
+        "⚠️ 当前数据库暂无任何业绩数据。请前往【📦 历史数据导入与恢复】板块上传您下载的日报表进行数据恢复！"
     )
   else:
     # 顶部核心指标统计
@@ -248,14 +248,12 @@ elif "📊 业务预警" in module:
 
     with tab_monthly:
       st.markdown("### 📊 月度累计报表")
-      # 提取年月
       df_all["month"] = df_all["report_date"].str[:7]
       selected_month = st.selectbox(
           "选择查看月份", sorted(df_all["month"].unique(), reverse=True)
       )
       df_month = df_all[df_all["month"] == selected_month]
 
-      # 按员工聚合月度数据
       numeric_cols = [
           "views_mine",
           "views_other",
@@ -298,7 +296,6 @@ elif "📊 业务预警" in module:
 
     with tab_warn:
       st.markdown("### 🚨 业务转化预警监控")
-      # 筛选最近一天的记录进行预警分析
       latest_date = df_all["report_date"].max()
       df_latest = df_all[df_all["report_date"] == latest_date]
 
@@ -307,7 +304,6 @@ elif "📊 业务预警" in module:
       for _, row in df_latest.iterrows():
         inv = row["invites"]
         inter = row["interview_count"]
-        # 预警规则示例：邀约数>5但到面数为0，或者邀约转化率偏低
         if inv >= 5 and inter == 0:
           warning_count += 1
           st.warning(
@@ -340,8 +336,8 @@ elif "📦 历史数据" in module:
   st.markdown("---")
   st.markdown(
       ">"
-      " **功能说明**：专门用于恢复历史数据。直接上传您之前导出的标准系统日报表（如"
-      " `招聘日报表_系统管理员_YYYY-MM-DD.xlsx`），系统将自动校验并整批恢复至数据库中。"
+      " **功能说明**：专门用于恢复历史数据。直接上传您之前导出的标准系统日报表（如您刚上传的"
+      " `招聘日报表_系统管理员_2026-08-10.xlsx`），系统将自动校验并整批恢复至数据库中。"
   )
 
   uploaded_file = st.file_uploader(
