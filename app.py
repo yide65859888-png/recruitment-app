@@ -15,7 +15,7 @@ def init_db():
   conn = sqlite3.connect(DB_NAME)
   cursor = conn.cursor()
 
-  # 1. 员工填报及历史导入表（增加版本/平台兼容及唯一性控制，支持INSERT OR REPLACE覆盖）
+  # 1. 员工填报及历史导入表（支持 INSERT OR REPLACE 覆盖更新）
   cursor.execute("""
         CREATE TABLE IF NOT EXISTS daily_reports (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,7 +51,6 @@ def init_db():
         )
     """)
 
-  # 初始化默认管理员及员工
   cursor.execute(
       "INSERT OR IGNORE INTO users (username, role) VALUES ('系统管理员', '管理员')"
   )
@@ -181,7 +180,7 @@ if "📱 员工端" in module:
       conn.close()
 
 # ==========================================
-# 模块二：业务预警与数据看板
+# 模块二：业务预警与数据看板（完整恢复）
 # ==========================================
 elif "📊 业务预警" in module:
   st.subheader("📊 业务预警与数据看板")
@@ -193,10 +192,137 @@ elif "📊 业务预警" in module:
 
   if df_all.empty:
     st.warning(
-        "⚠️ 当前数据库暂无任何业绩数据。请前往【📦 历史数据导入与恢复】板块上传您下载的日报表进行数据恢复！"
+        "⚠️ 当前数据库暂无任何业绩数据。请前往【📦 历史数据导入与恢复】板块上传您之前导出的日报表进行恢复！"
     )
   else:
-    st.dataframe(df_all, use_container_width=True)
+    # 顶部核心指标统计
+    total_greetings = df_all["greetings"].sum()
+    total_chats = df_all["chats"].sum()
+    total_invites = df_all["invites"].sum()
+    total_interviews = df_all["interview_count"].sum()
+    total_train = df_all["train_total"].sum()
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("累计打招呼", f"{total_greetings:,}")
+    m2.metric("累计沟通", f"{total_chats:,}")
+    m3.metric("累计邀约", f"{total_invites:,}")
+    m4.metric("累计到面", f"{total_interviews:,}")
+    m5.metric("累计参培", f"{total_train:,}")
+
+    st.markdown("---")
+    tab_board, tab_daily, tab_monthly, tab_rank, tab_warn = st.tabs([
+        "📈 综合看板",
+        "📋 日报明细",
+        "📊 月度累计报表",
+        "🏆 员工排名",
+        "🚨 业务预警",
+    ])
+
+    with tab_board:
+      st.markdown("### 📈 核心转化漏斗与趋势")
+      col_a, col_b = st.columns(2)
+      with col_a:
+        st.markdown("#### 各员工总参培贡献")
+        if not df_all.empty:
+          emp_train = (
+              df_all.groupby("employee_name")["train_total"].sum().reset_index()
+          )
+          st.bar_chart(emp_train.set_index("employee_name"))
+      with col_b:
+        st.markdown("#### 每日总到面趋势")
+        if not df_all.empty:
+          date_interview = (
+              df_all.groupby("report_date")["interview_count"]
+              .sum()
+              .reset_index()
+          )
+          st.line_chart(date_interview.set_index("report_date"))
+
+    with tab_daily:
+      st.markdown("### 📋 每日原始业绩明细表")
+      selected_date = st.selectbox(
+          "选择查看日期", sorted(df_all["report_date"].unique(), reverse=True)
+      )
+      df_day = df_all[df_all["report_date"] == selected_date]
+      st.dataframe(df_day, use_container_width=True)
+
+    with tab_monthly:
+      st.markdown("### 📊 月度累计报表")
+      # 提取年月
+      df_all["month"] = df_all["report_date"].str[:7]
+      selected_month = st.selectbox(
+          "选择查看月份", sorted(df_all["month"].unique(), reverse=True)
+      )
+      df_month = df_all[df_all["month"] == selected_month]
+
+      # 按员工聚合月度数据
+      numeric_cols = [
+          "views_mine",
+          "views_other",
+          "greetings",
+          "new_greetings",
+          "chats",
+          "resumes",
+          "phones",
+          "interviews_accepted",
+          "invites",
+          "interview_count",
+          "train_in_full",
+          "train_in_part",
+          "train_out_full",
+          "train_out_part",
+          "train_total",
+      ]
+      df_month_agg = (
+          df_month.groupby("employee_name")[numeric_cols].sum().reset_index()
+      )
+      st.dataframe(df_month_agg, use_container_width=True)
+
+    with tab_rank:
+      st.markdown("### 🏆 员工招聘绩效排名")
+      metric_choice = st.selectbox(
+          "选择排名依据指标", ["train_total", "interview_count", "invites", "chats"]
+      )
+      metric_names = {
+          "train_total": "总参培数",
+          "interview_count": "到面数",
+          "invites": "邀约数",
+          "chats": "沟通数",
+      }
+      df_rank = (
+          df_all.groupby("employee_name")[metric_choice].sum().reset_index()
+      )
+      df_rank = df_rank.sort_values(by=metric_choice, ascending=False)
+      df_rank.columns = ["员工姓名", metric_names[metric_choice]]
+      st.dataframe(df_rank, use_container_width=True)
+
+    with tab_warn:
+      st.markdown("### 🚨 业务转化预警监控")
+      # 筛选最近一天的记录进行预警分析
+      latest_date = df_all["report_date"].max()
+      df_latest = df_all[df_all["report_date"] == latest_date]
+
+      st.info(f"当前监控最新日期：{latest_date}")
+      warning_count = 0
+      for _, row in df_latest.iterrows():
+        inv = row["invites"]
+        inter = row["interview_count"]
+        # 预警规则示例：邀约数>5但到面数为0，或者邀约转化率偏低
+        if inv >= 5 and inter == 0:
+          warning_count += 1
+          st.warning(
+              f"⚠️ **【高危预警】** 员工 **{row['employee_name']}** ({row['platform_version']}) 在 {latest_date} 邀约数达到 {inv} 人，但到面数为 **0**，请关注邀约真实性或跟进情况！"
+          )
+        elif inv > 0 and (inter / inv) < 0.2:
+          warning_count += 1
+          st.warning(
+              f"⚠️ **【转化偏低】** 员工 **{row['employee_name']}** ({row['platform_version']}) 在 {latest_date} 到面转化率为 **{(inter/inv*100):.1f}%** (低于20%)，建议协助复盘。"
+          )
+
+      if warning_count == 0:
+        st.success(
+            "🎉 最新一天业务数据运行平稳，暂未触发任何异常转化预警指标！"
+        )
 
 # ==========================================
 # 模块三：数据端智能识图
@@ -204,20 +330,17 @@ elif "📊 业务预警" in module:
 elif "🤖 数据端" in module:
   st.subheader("🤖 数据端：智能识图/录入业绩")
   st.markdown("---")
-  st.info(
-      "在此处可上传手机截图进行大模型OCR智能识别并自动录入，如需补录旧数据请直接使用左侧的【📦"
-      " 历史数据导入与恢复】板块。"
-  )
+  st.info("在此处可上传手机截图进行大模型OCR智能识别录入。")
 
 # ==========================================
-# 模块四：📦 历史数据导入与恢复（独立新增板块）
+# 模块四：📦 历史数据导入与恢复
 # ==========================================
 elif "📦 历史数据" in module:
   st.subheader("📦 历史数据导入与恢复（日报表批量上传）")
   st.markdown("---")
   st.markdown(
       ">"
-      " **功能说明**：专门用于恢复因系统异常或重置而丢失的历史数据。直接上传您之前导出的标准系统日报表（如"
+      " **功能说明**：专门用于恢复历史数据。直接上传您之前导出的标准系统日报表（如"
       " `招聘日报表_系统管理员_YYYY-MM-DD.xlsx`），系统将自动校验并整批恢复至数据库中。"
   )
 
@@ -251,12 +374,9 @@ elif "📦 历史数据" in module:
 
         success_count = 0
         for _, row in df_import.iterrows():
-          # 兼容处理字段映射
           r_date = str(row.get("具体日期", datetime.date.today()))[:10]
           e_name = str(row.get("员工姓名", "未知员工"))
-          p_version = str(
-              row.get("平台版本", "易德Boss1号")
-          )  # 如果没有此列则默认
+          p_version = str(row.get("平台版本", "易德Boss1号"))
 
           if import_mode.startswith("覆盖更新"):
             cursor.execute(
@@ -330,11 +450,11 @@ elif "📦 历史数据" in module:
         conn.close()
         st.success(
             f"🎉 成功导入并恢复了 {success_count} 条历史记录！您现在可以前往【📊"
-            " 业务预警与数据看板】查看恢复后的数据。"
+            " 业务预警与数据看板】查看完整恢复后的看板、日报、月报和排名。"
         )
 
     except Exception as e:
-      st.error(f"❌ 文件解析或导入出错，请确认上传的是正确的系统日报表。错误信息: {e}")
+      st.error(f"❌ 文件解析或导入出错。错误信息: {e}")
 
 # ==========================================
 # 模块五：管理端维护
