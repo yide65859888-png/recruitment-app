@@ -1537,13 +1537,13 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                     st.rerun()
         else:
             st.info("ℹ️ 暂无平台提交记录。")
-         # ==========================================
-# 独立模块：历史数据批量恢复/导入（覆盖更新版）
+     # ==========================================
+# 独立模块：历史数据批量恢复/导入（全字段无损抓取版）
 # ==========================================
 st.sidebar.markdown("---")
 if st.sidebar.checkbox("📁 展开历史数据导入工具"):
-    st.header("📁 历史日报表恢复与批量导入")
-    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并覆盖保存（以最新上传文件为准）。")
+    st.header("📁 历史日报表恢复与全字段批量导入")
+    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并全字段覆盖保存。")
     
     import_date = st.date_input("选择历史数据归属日期", datetime.date.today(), key="batch_import_date")
     uploaded_file = st.file_uploader("选择之前导出的日报表文件", type=["xlsx", "csv"], key="batch_import_file")
@@ -1558,9 +1558,12 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
             st.write("📖 **读取到的数据预览：**")
             st.dataframe(import_df.head(10), use_container_width=True)
             
-            # 精准列名映射表
+            # 1. 覆盖表格中出现的所有字段映射（包含前段沟通、中段邀约、后段参培）
             col_map = {
+                "具体日期": "date",
+                "日期": "date",
                 "员工姓名": "employee_name",
+                "姓名": "employee_name",
                 "平台版本": "platform_version",
                 "我看过": "i_looked",
                 "看过我": "seen_me",
@@ -1581,11 +1584,15 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                 "参培数(内单兼职)": "trained_parttime",
                 "参培数(外单全职)": "trained_out_fulltime",
                 "参培数(外单兼职)": "trained_out_parttime",
-                "参培数": "trained_total"
+                "参培数": "trained_total",
+                "到面转化率": "interview_conversion_rate"
             }
             
-            if st.button("🚀 确认导入并覆盖保存", use_container_width=True, key="btn_confirm_import"):
+            if st.button("🚀 确认全字段导入并覆盖保存", use_container_width=True, key="btn_confirm_import"):
+                # 清理表头空格
+                import_df.columns = [str(c).strip() for c in import_df.columns]
                 valid_cols = [c for c in import_df.columns if c in col_map]
+                
                 if not valid_cols:
                     st.error("无法识别列名，请确认上传的文件包含标准的招聘表头。")
                 else:
@@ -1600,48 +1607,50 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                     
                     records = ready_df.to_dict(orient='records')
                     
-                    # 写入 SQLite 数据库（覆盖模式：先清空当前日期数据，再写入新数据）
+                    # 写入 SQLite 数据库（单表全字段覆盖模式）
                     with sqlite3.connect(DB_PATH) as conn:
                         c = conn.cursor()
                         
-                        # 1. 清空选定日期的旧记录
+                        # 自动为 platform_data 补充缺少的所有字段（保证不漏抓）
+                        db_cols = [col[1] for col in c.execute("PRAGMA table_info(platform_data)").fetchall()]
+                        needed_cols = [
+                            "i_looked", "seen_me", "i_greeted", "candidate_greeted", "i_communicated", 
+                            "received_resumes", "exchanged_contact", "accepted_interview",
+                            "invited", "interviewed", "trained_fulltime", "trained_parttime", 
+                            "trained_out_fulltime", "trained_out_parttime", "trained_total"
+                        ]
+                        for col in needed_cols:
+                            if col not in db_cols:
+                                try:
+                                    c.execute(f"ALTER TABLE platform_data ADD COLUMN {col} INTEGER DEFAULT 0")
+                                except Exception:
+                                    pass
+                        
+                        # 1. 删除当前日期旧数据
                         c.execute("DELETE FROM platform_data WHERE date = ?", (str(import_date),))
-                        try:
-                            c.execute("DELETE FROM conversion_data WHERE date = ?", (str(import_date),))
-                        except Exception:
-                            pass
 
-                        # 2. 写入最新数据
+                        # 2. 全字段一次性写入主表
                         for r in records:
                             c.execute("""
                                 INSERT INTO platform_data 
-                                (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, i_communicated, received_resumes, exchanged_contact, accepted_interview)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, 
+                                 i_communicated, received_resumes, exchanged_contact, accepted_interview,
+                                 invited, interviewed, trained_fulltime, trained_parttime, trained_out_fulltime, trained_out_parttime, trained_total)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (
                                 r.get('date'), r.get('employee_name'), r.get('platform_version', '综合'),
-                                int(r.get('i_looked', 0)), int(r.get('seen_me', 0)), int(r.get('i_greeted', 0)),
-                                int(r.get('candidate_greeted', 0)), int(r.get('i_communicated', 0)),
-                                int(r.get('received_resumes', 0)), int(r.get('exchanged_contact', 0)),
-                                int(r.get('accepted_interview', 0))
+                                int(float(r.get('i_looked', 0))), int(float(r.get('seen_me', 0))), int(float(r.get('i_greeted', 0))),
+                                int(float(r.get('candidate_greeted', 0))), int(float(r.get('i_communicated', 0))),
+                                int(float(r.get('received_resumes', 0))), int(float(r.get('exchanged_contact', 0))),
+                                int(float(r.get('accepted_interview', 0))),
+                                int(float(r.get('invited', 0))), int(float(r.get('interviewed', 0))),
+                                int(float(r.get('trained_fulltime', 0))), int(float(r.get('trained_parttime', 0))),
+                                int(float(r.get('trained_out_fulltime', 0))), int(float(r.get('trained_out_parttime', 0))),
+                                int(float(r.get('trained_total', 0)))
                             ))
-                            
-                            try:
-                                c.execute("""
-                                    INSERT INTO conversion_data 
-                                    (date, employee_name, invited, interviewed, trained_fulltime, trained_parttime, trained_out_fulltime, trained_out_parttime, trained_total)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """, (
-                                    r.get('date'), r.get('employee_name'),
-                                    int(r.get('invited', 0)), int(r.get('interviewed', 0)),
-                                    int(r.get('trained_fulltime', 0)), int(r.get('trained_parttime', 0)),
-                                    int(r.get('trained_out_fulltime', 0)), int(r.get('trained_out_parttime', 0)),
-                                    int(r.get('trained_total', 0))
-                                ))
-                            except Exception:
-                                pass
                                 
                         conn.commit()
-                    st.success(f"🎉 已成功重置并以最新文件覆盖该日期的 {len(records)} 条数据！")
+                    st.success(f"🎉 成功识别并精准导入了 {len(records)} 条数据的全部列字段！")
                     st.balloons()
         except Exception as e:
             st.error(f"解析文件失败: {e}")
