@@ -1187,19 +1187,18 @@ else:
                 f" {a['reason']}<br/>• <b>AI 建议动作：</b>"
                 f" {a['action']}</div>",
                 unsafe_allow_html=True,
-            )
-    else:
-        st.success("🎉 全员数据表现正常，暂无过程卡点预警！")
+           )
+            st.success("🎉 全员数据表现正常，暂无过程卡点预警！")
 
-# ---------------------------------------------------------
-# 模块三：数据端
-# ---------------------------------------------------------
-elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
-    st.markdown(
-        "<div class='main-header'>📋 数据端：部门业绩汇总与智能识图录入"
-        " (管理员专用)</div>",
-        unsafe_allow_html=True,
-    )
+    # --------------------------------------------------
+    # 模块三：数据端
+    # --------------------------------------------------
+    if page == "📋 数据端：智能识图/录入业绩" and is_admin:
+        st.markdown(
+            "<div class='main-header'>📋 数据端：部门业绩汇总与智能识图录入"
+            " (管理员专用)</div>",
+            unsafe_allow_html=True,
+        )
     col_type, col_date = st.columns(2)
     data_type = col_type.radio(
         "📌 选择上传的数据表类型：",
