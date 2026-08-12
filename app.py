@@ -455,6 +455,8 @@ def generate_enhanced_ai_diagnosis(df_summary, is_monthly=False):
 
 
 def render_full_ranking(df, col_name, title_name, unit=""):
+    if col_name not in df.columns:
+        return
     df_sorted = df.sort_values(by=col_name, ascending=False).reset_index(
         drop=True
     )
@@ -819,15 +821,6 @@ elif page == "📊 业务预警与数据看板":
         df_summary, df_perf_grouped, on="员工姓名", how="left"
     ).fillna(0)
 
-    df_summary["到面转化率数值"] = df_summary.apply(
-        lambda r: (
-            (r["到面数"] / r["邀约数"] * 100)
-            if r.get("邀约数", 0) > 0
-            else 0.0
-        ),
-        axis=1,
-    )
-
     numeric_cols_to_sum = [
         "我看过",
         "看过我",
@@ -846,9 +839,23 @@ elif page == "📊 业务预警与数据看板":
         "参培数",
     ]
 
+    # 兼容处理：确保所有指标列均存在并补充默认值 0
+    for col in numeric_cols_to_sum:
+        if col not in df_summary.columns:
+            df_summary[col] = 0
+
+    df_summary["到面转化率数值"] = df_summary.apply(
+        lambda r: (
+            (r["到面数"] / r["邀约数"] * 100)
+            if r.get("邀约数", 0) > 0
+            else 0.0
+        ),
+        axis=1,
+    )
+
     total_row = {"员工姓名": "合计"}
     for col in numeric_cols_to_sum:
-        total_row[col] = df_summary[col].sum()
+        total_row[col] = df_summary[col].sum() if not df_summary.empty else 0
 
     total_invites = total_row["邀约数"]
     total_interviews = total_row["到面数"]
