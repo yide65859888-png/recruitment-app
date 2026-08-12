@@ -1537,13 +1537,13 @@ elif page == "⚙️ 管理端：账号管理与记录维护" and is_admin:
                     st.rerun()
         else:
             st.info("ℹ️ 暂无平台提交记录。")
-          # ==========================================
-# 独立模块：历史数据批量恢复/导入（修正匹配版）
+         # ==========================================
+# 独立模块：历史数据批量恢复/导入（覆盖更新版）
 # ==========================================
 st.sidebar.markdown("---")
 if st.sidebar.checkbox("📁 展开历史数据导入工具"):
     st.header("📁 历史日报表恢复与批量导入")
-    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并保存到数据库。")
+    st.caption("上传之前导出的 Excel (.xlsx) 或 CSV (.csv) 日报表文件，自动解析并覆盖保存（以最新上传文件为准）。")
     
     import_date = st.date_input("选择历史数据归属日期", datetime.date.today(), key="batch_import_date")
     uploaded_file = st.file_uploader("选择之前导出的日报表文件", type=["xlsx", "csv"], key="batch_import_file")
@@ -1584,8 +1584,7 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                 "参培数": "trained_total"
             }
             
-            if st.button("🚀 确认导入并保存", use_container_width=True, key="btn_confirm_import"):
-                # 过滤并重命名列
+            if st.button("🚀 确认导入并覆盖保存", use_container_width=True, key="btn_confirm_import"):
                 valid_cols = [c for c in import_df.columns if c in col_map]
                 if not valid_cols:
                     st.error("无法识别列名，请确认上传的文件包含标准的招聘表头。")
@@ -1601,13 +1600,21 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                     
                     records = ready_df.to_dict(orient='records')
                     
-                    # 写入 SQLite 数据库（平台前段数据 + 转化后段数据）
+                    # 写入 SQLite 数据库（覆盖模式：先清空当前日期数据，再写入新数据）
                     with sqlite3.connect(DB_PATH) as conn:
                         c = conn.cursor()
+                        
+                        # 1. 清空选定日期的旧记录
+                        c.execute("DELETE FROM platform_data WHERE date = ?", (str(import_date),))
+                        try:
+                            c.execute("DELETE FROM conversion_data WHERE date = ?", (str(import_date),))
+                        except Exception:
+                            pass
+
+                        # 2. 写入最新数据
                         for r in records:
-                            # 1. 写入平台前段数据表
                             c.execute("""
-                                INSERT OR REPLACE INTO platform_data 
+                                INSERT INTO platform_data 
                                 (date, employee_name, platform_version, i_looked, seen_me, i_greeted, candidate_greeted, i_communicated, received_resumes, exchanged_contact, accepted_interview)
                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """, (
@@ -1618,10 +1625,9 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                                 int(r.get('accepted_interview', 0))
                             ))
                             
-                            # 2. 写入流程转化后段数据表（如果对应表存在）
                             try:
                                 c.execute("""
-                                    INSERT OR REPLACE INTO conversion_data 
+                                    INSERT INTO conversion_data 
                                     (date, employee_name, invited, interviewed, trained_fulltime, trained_parttime, trained_out_fulltime, trained_out_parttime, trained_total)
                                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (
@@ -1635,7 +1641,7 @@ if st.sidebar.checkbox("📁 展开历史数据导入工具"):
                                 pass
                                 
                         conn.commit()
-                    st.success(f"🎉 成功导入并纠正 {len(records)} 条完整历史数据！")
+                    st.success(f"🎉 已成功重置并以最新文件覆盖该日期的 {len(records)} 条数据！")
                     st.balloons()
         except Exception as e:
             st.error(f"解析文件失败: {e}")
