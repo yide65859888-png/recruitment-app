@@ -108,7 +108,7 @@ PLATFORM_OPTIONS = [
 YESTERDAY = datetime.date.today() - datetime.timedelta(days=1)
 
 QWEN_CONFIG = {
-    "api_key": "sk-eogrtqfwedttonwhabcvsvswmmfnncjqlzbesnhtbqlanrzy",
+    "api_key": st.secrets["QWEN_API_KEY"],
     "base_url": "https://api.siliconflow.cn/v1",
     "model": "Qwen/Qwen3.6-35B-A3B",
     "enable_thinking": False,
