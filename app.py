@@ -585,8 +585,11 @@ if page == "📱 员工端：手机填报与截图上传":
                 "exchanged_contact": ocr["exchanged_contact"],
                 "accepted_interview": ocr["accepted_interview"],
             }
-            # 利用 Supabase upsert 功能（需把 date, employee_name, platform_version 设为复合主键/唯一索引）
-            supabase.table("platform_data").upsert(payload).execute()
+            # 显式声明 on_conflict，防止后端报 APIError 无法区分约束
+            supabase.table("platform_data").upsert(
+                payload, 
+                on_conflict="date, employee_name, platform_version"
+            ).execute()
 
             st.session_state.uploader_key += 1
             st.balloons()
@@ -1082,7 +1085,10 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
                         "month_outer_pt": int(row["参培数(外单兼职)"]),
                         "month_trainees": int(row["参培数"]),
                     }
-                supabase.table("performance_data").upsert(payload).execute()
+                supabase.table("performance_data").upsert(
+                    payload,
+                    on_conflict="date, employee_name"
+                ).execute()
 
             st.balloons()
             st.success(
