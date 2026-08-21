@@ -1109,16 +1109,24 @@ elif page == "📋 数据端：智能识图/录入业绩" and is_admin:
         perf_records_df = pd.DataFrame(res_perf_all.data)
         perf_records_df = perf_records_df.rename(
             columns={
-                "id": "记录编号",
-                "date": "数据日期",
-                "employee_name": "员工姓名",
-                "invites": "日邀约",
-                "interviews": "日到面",
-                "trainees": "日参培",
-                "month_invites": "月邀约",
-                "month_interviews": "月到面",
-                "month_trainees": "月参培",
-            }
+        "id": "记录编号",
+        "date": "数据日期",
+        "employee_name": "员工姓名",
+        "invites": "日邀约",
+        "interviews": "日到面",
+        "inner_ft": "日内单全职参培",
+        "inner_pt": "日内单兼职参培",
+        "outer_ft": "日外单全职参培",
+        "outer_pt": "日外单兼职参培",
+        "trainees": "日总参培",
+        "month_invites": "月邀约",
+        "month_interviews": "月到面",
+        "month_inner_ft": "月内单全职参培",
+        "month_inner_pt": "月内单兼职参培",
+        "month_outer_ft": "月外单全职参培",
+        "month_outer_pt": "月外单兼职参培",
+        "month_trainees": "月总参培",
+    }
         )
         perf_records_df.index = range(1, len(perf_records_df) + 1)
         st.dataframe(perf_records_df, use_container_width=True)
